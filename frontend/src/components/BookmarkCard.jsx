@@ -92,7 +92,7 @@ export default function BookmarkCard({ bookmark, onDelete }) {
 
         {/* AI Summary */}
         {bookmark.summary && (
-          <p className="text-xs text-slate-500 leading-relaxed line-clamp-3">
+          <p className="text-xs text-slate-500 leading-relaxed">
             {bookmark.summary}
           </p>
         )}

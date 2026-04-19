@@ -40,11 +40,15 @@ def keyword_search(db: Session, query: str, user_id: int, limit: int = 50) -> Li
             bm.description or "",
             " ".join(bm.tags or []),
             bm.url,
-        ]))
+        ])).lower()
         bm_tokens = _tokenize(haystack)
-        overlap = len(query_tokens & bm_tokens)
-        if overlap > 0:
-            scored.append((overlap, bm))
+        # Exact token match (highest signal)
+        exact_overlap = len(query_tokens & bm_tokens)
+        # Substring match so "tech" matches "technical", "cyber" matches "cybersecurity"
+        substring_hits = sum(1 for qt in query_tokens if qt in haystack)
+        score = exact_overlap * 2 + substring_hits
+        if score > 0:
+            scored.append((score, bm))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [bm for _, bm in scored[:limit]]
 
@@ -82,7 +86,7 @@ class FAISSIndex:
 
         texts = []
         for bm in bookmarks:
-            parts = filter(None, [bm.title, bm.summary, " ".join(bm.tags or [])])
+            parts = filter(None, [bm.title, bm.summary, bm.description, " ".join(bm.tags or [])])
             texts.append(" ".join(parts) or bm.url)
 
         vectors = self._embed(texts)
@@ -100,7 +104,7 @@ class FAISSIndex:
         distances, indices = self._index.search(q_vec, k)
         results = []
         for dist, idx in zip(distances[0], indices[0]):
-            if idx == -1 or dist < 0.3:
+            if idx == -1 or dist < 0.28:
                 continue
             results.append(self._ids[idx])
         return results
