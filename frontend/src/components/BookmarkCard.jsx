@@ -1,5 +1,17 @@
 import { useState } from 'react'
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
+function proxyIfNeeded(imageUrl) {
+  if (!imageUrl) return imageUrl
+  // Instagram and TikTok CDNs block cross-origin image loads from the browser,
+  // so route those through our backend image proxy.
+  if (/cdninstagram\.com|fbcdn\.net|tiktokcdn/i.test(imageUrl)) {
+    return `${API_URL}/proxy-image?url=${encodeURIComponent(imageUrl)}`
+  }
+  return imageUrl
+}
+
 function getDomain(url) {
   try {
     return new URL(url).hostname.replace('www.', '')
@@ -43,7 +55,7 @@ export default function BookmarkCard({ bookmark, onDelete }) {
       {bookmark.image_url && !imgError ? (
         <div className="w-full h-44 overflow-hidden bg-slate-50 shrink-0">
           <img
-            src={bookmark.image_url}
+            src={proxyIfNeeded(bookmark.image_url)}
             alt={bookmark.title || 'Bookmark thumbnail'}
             onError={() => setImgError(true)}
             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"

@@ -1,5 +1,7 @@
+import requests
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.orm import Session
@@ -45,6 +47,25 @@ app.add_middleware(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/proxy-image")
+def proxy_image(url: str):
+    """Proxy images from restricted CDNs (e.g. Instagram) to bypass browser CORS."""
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Referer": "https://www.instagram.com/",
+        }
+        resp = requests.get(url, headers=headers, timeout=10, stream=True)
+        resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "image/jpeg")
+        return Response(content=resp.content, media_type=content_type)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Image not available")
 
 
 # ---------------------------------------------------------------------------
