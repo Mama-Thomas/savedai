@@ -25,12 +25,32 @@ from app.models import Bookmark
 # Keyword search (always available)
 # ---------------------------------------------------------------------------
 
+_STOPWORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "this", "that", "these", "those", "it", "its", "of", "for", "to", "in",
+    "on", "at", "by", "with", "about", "as", "from", "and", "or", "but",
+    "if", "then", "than", "so", "i", "me", "my", "we", "our", "you", "your",
+    "he", "she", "they", "them", "their", "please", "show", "find", "give",
+    "video", "videos", "post", "posts", "content", "reel", "reels", "some",
+    "any", "something", "thing", "things",
+}
+
+
 def _tokenize(text: str) -> set:
     return set(re.findall(r"\w+", text.lower()))
 
 
+def _clean_query(text: str) -> str:
+    tokens = re.findall(r"\w+", text.lower())
+    meaningful = [t for t in tokens if t not in _STOPWORDS]
+    return " ".join(meaningful) or text
+
+
 def keyword_search(db: Session, query: str, user_id: int, limit: int = 50) -> List[Bookmark]:
-    query_tokens = _tokenize(query)
+    # Strip stopwords and very short tokens so "a video about fiber" searches for "fiber"
+    query_tokens = {t for t in _tokenize(query) if t not in _STOPWORDS and len(t) >= 3}
+    if not query_tokens:
+        return []
     bookmarks = db.query(Bookmark).filter(Bookmark.user_id == user_id).all()
     scored = []
     for bm in bookmarks:
@@ -42,9 +62,7 @@ def keyword_search(db: Session, query: str, user_id: int, limit: int = 50) -> Li
             bm.url,
         ])).lower()
         bm_tokens = _tokenize(haystack)
-        # Exact token match (highest signal)
         exact_overlap = len(query_tokens & bm_tokens)
-        # Substring match so "tech" matches "technical", "cyber" matches "cybersecurity"
         substring_hits = sum(1 for qt in query_tokens if qt in haystack)
         score = exact_overlap * 2 + substring_hits
         if score > 0:
@@ -104,7 +122,7 @@ class FAISSIndex:
         distances, indices = self._index.search(q_vec, k)
         results = []
         for dist, idx in zip(distances[0], indices[0]):
-            if idx == -1 or dist < 0.28:
+            if idx == -1 or dist < 0.38:
                 continue
             results.append(self._ids[idx])
         return results
@@ -119,7 +137,7 @@ def semantic_search(db: Session, query: str, user_id: int, limit: int = 20) -> L
 
     bookmarks = db.query(Bookmark).filter(Bookmark.user_id == user_id).all()
     _faiss_index.build(bookmarks)
-    matched_ids = _faiss_index.query(query, k=limit)
+    matched_ids = _faiss_index.query(_clean_query(query), k=limit)
 
     if not matched_ids:
         return keyword_search(db, query, user_id, limit)
