@@ -24,7 +24,13 @@ from app.auth import (
 )
 from app.database import Base, engine, get_db
 from app.metadata import fetch_metadata
-from app.search import build_bookmark_text, embed_single, search_bookmarks
+from app.transcript import fetch_transcript
+from app.search import (
+    build_bookmark_text,
+    build_match_info,
+    embed_single,
+    search_bookmarks,
+)
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -184,9 +190,21 @@ def create_bookmark(
     # Fetch page metadata
     title, description, image_url = fetch_metadata(payload.url)
 
-    # AI summary + tags
+    # Fetch transcript / article body. Best-effort, never fatal.
     try:
-        summary, tags = generate_summary_and_tags(payload.url, title or "", description or "")
+        transcript, transcript_source = fetch_transcript(payload.url)
+    except Exception:
+        transcript, transcript_source = None, "none"
+
+    # AI summary + tags — pass transcript through so summaries reflect real content.
+    try:
+        summary, tags = generate_summary_and_tags(
+            payload.url,
+            title or "",
+            description or "",
+            transcript=transcript,
+            transcript_source=transcript_source,
+        )
     except Exception:
         summary = description or ""
         tags = []
@@ -198,6 +216,8 @@ def create_bookmark(
         image_url=image_url,
         summary=summary,
         tags=tags,
+        transcript=transcript,
+        transcript_source=transcript_source,
         user_id=current_user.id,
         collection_id=payload.collection_id,
     )
@@ -276,7 +296,19 @@ def search(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return search_bookmarks(db, q, user_id=current_user.id)
+    results = search_bookmarks(db, q, user_id=current_user.id)
+    if not q.strip():
+        return results
+    # Attach a snippet + terms per result so the UI can highlight the match.
+    out = []
+    for bm in results:
+        info = build_match_info(bm, q)
+        payload = schemas.BookmarkResponse.model_validate(bm).model_dump()
+        payload["match_snippet"] = info.get("snippet")
+        payload["match_terms"] = info.get("terms") or []
+        payload["match_field"] = info.get("field")
+        out.append(payload)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -898,6 +930,107 @@ def delete_collection(
     ).update({"collection_id": None})
     db.delete(coll)
     db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Shared collections (public read-only links)
+# ---------------------------------------------------------------------------
+
+import secrets
+
+
+def _generate_share_token() -> str:
+    # 32-char URL-safe token. 192 bits of entropy, way more than needed.
+    return secrets.token_urlsafe(24)
+
+
+@app.post("/collections/{collection_id}/share")
+def share_collection(
+    collection_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Enable public sharing on a collection and return its share token.
+    If already shared, returns the existing token (idempotent)."""
+    coll = (
+        db.query(models.Collection)
+        .filter(
+            models.Collection.id == collection_id,
+            models.Collection.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not coll:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    if not coll.share_token:
+        # Loop defensively in case of an unlikely collision.
+        for _ in range(5):
+            candidate = _generate_share_token()
+            exists = (
+                db.query(models.Collection)
+                .filter(models.Collection.share_token == candidate)
+                .first()
+            )
+            if not exists:
+                coll.share_token = candidate
+                break
+        else:
+            raise HTTPException(status_code=500, detail="Could not allocate share token")
+        db.commit()
+        db.refresh(coll)
+    return {
+        "collection_id": coll.id,
+        "share_token": coll.share_token,
+        "enabled": True,
+    }
+
+
+@app.delete("/collections/{collection_id}/share", status_code=204)
+def unshare_collection(
+    collection_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    coll = (
+        db.query(models.Collection)
+        .filter(
+            models.Collection.id == collection_id,
+            models.Collection.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not coll:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    coll.share_token = None
+    db.commit()
+
+
+@app.get(
+    "/public/collections/{token}",
+    response_model=schemas.PublicCollectionResponse,
+)
+def read_public_collection(token: str, db: Session = Depends(get_db)):
+    """Unauthenticated read of a shared collection. No rate-limit exemption:
+    the slowapi middleware still applies, just no auth dependency."""
+    coll = (
+        db.query(models.Collection)
+        .filter(models.Collection.share_token == token)
+        .first()
+    )
+    if not coll:
+        raise HTTPException(status_code=404, detail="This share link is not valid.")
+    bookmarks = (
+        db.query(models.Bookmark)
+        .filter(models.Bookmark.collection_id == coll.id)
+        .order_by(models.Bookmark.created_at.desc())
+        .all()
+    )
+    return schemas.PublicCollectionResponse(
+        name=coll.name,
+        created_at=coll.created_at,
+        bookmark_count=len(bookmarks),
+        bookmarks=[schemas.BookmarkResponse.model_validate(bm) for bm in bookmarks],
+    )
 
 
 # ---------------------------------------------------------------------------

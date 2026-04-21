@@ -40,6 +40,16 @@ class BookmarkResponse(BaseModel):
     tags: Optional[List[str]] = []
     created_at: datetime
     collection_id: Optional[int] = None
+    # Where the transcript came from. One of: youtube, article, caption, none.
+    # We intentionally do NOT return the full transcript body to keep the list
+    # endpoint lightweight; the server uses it internally for Ask and search.
+    transcript_source: Optional[str] = None
+    # Populated only by /search: a short plain-text snippet containing the
+    # matching phrase, plus the lowercase terms to highlight in the UI.
+    match_snippet: Optional[str] = None
+    match_terms: Optional[List[str]] = None
+    # Which field the snippet came from ("title" / "summary" / "transcript" / etc.)
+    match_field: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -84,9 +94,21 @@ class CollectionResponse(BaseModel):
     id: int
     name: str
     created_at: datetime
+    # Present (non-null) when the collection is publicly shared.
+    share_token: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class PublicCollectionResponse(BaseModel):
+    """Payload for the unauthenticated /public/collections/{token} endpoint.
+    Deliberately minimal: no user info, no internal IDs beyond the owner's name
+    label if we decide to expose it later."""
+    name: str
+    created_at: datetime
+    bookmark_count: int
+    bookmarks: List[BookmarkResponse]
 
 
 # ---------------------------------------------------------------------------

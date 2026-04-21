@@ -59,6 +59,7 @@ def keyword_search(db: Session, query: str, user_id: int, limit: int = 50) -> Li
             bm.summary or "",
             bm.description or "",
             " ".join(bm.tags or []),
+            bm.transcript or "",
             bm.url,
         ])).lower()
         bm_tokens = _tokenize(haystack)
@@ -76,7 +77,18 @@ def keyword_search(db: Session, query: str, user_id: int, limit: int = 50) -> Li
 # ---------------------------------------------------------------------------
 
 def build_bookmark_text(bm: Bookmark) -> str:
-    parts = filter(None, [bm.title, bm.summary, bm.description, " ".join(bm.tags or [])])
+    # Include the transcript (when present) so embeddings reflect what's
+    # actually said in videos / written in articles, not just metadata.
+    parts = filter(
+        None,
+        [
+            bm.title,
+            bm.summary,
+            bm.description,
+            " ".join(bm.tags or []),
+            bm.transcript or "",
+        ],
+    )
     return " ".join(parts) or bm.url
 
 
@@ -169,3 +181,79 @@ def search_bookmarks(db: Session, query: str, user_id: int) -> List[Bookmark]:
         return semantic_search(db, query, user_id)
     except Exception:
         return keyword_search(db, query, user_id)
+
+
+# ---------------------------------------------------------------------------
+# Highlight snippets
+# ---------------------------------------------------------------------------
+
+def _match_terms(query: str) -> List[str]:
+    """Lowercased, stopword-filtered query tokens worth highlighting."""
+    tokens = re.findall(r"\w+", query.lower())
+    terms = [t for t in tokens if t not in _STOPWORDS and len(t) >= 2]
+    # De-dup while keeping order.
+    seen = set()
+    out = []
+    for t in terms:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+def _excerpt_around(text: str, terms: List[str], radius: int = 90) -> Optional[str]:
+    """Return a short excerpt of `text` centered on the first term match.
+    Uses a radius of characters on either side. Returns None if no term hits."""
+    if not text or not terms:
+        return None
+    lower = text.lower()
+    best_idx = -1
+    best_len = 0
+    for t in terms:
+        idx = lower.find(t)
+        if idx != -1 and (best_idx == -1 or idx < best_idx):
+            best_idx = idx
+            best_len = len(t)
+    if best_idx == -1:
+        return None
+    start = max(0, best_idx - radius)
+    end = min(len(text), best_idx + best_len + radius)
+    # Snap to word boundaries so we don't start / end mid-word.
+    if start > 0:
+        space = text.rfind(" ", 0, start + 20)
+        if space != -1 and space >= start:
+            start = space + 1
+    if end < len(text):
+        space = text.find(" ", end - 20)
+        if space != -1:
+            end = space
+    snippet = text[start:end].strip()
+    if start > 0:
+        snippet = "... " + snippet
+    if end < len(text):
+        snippet = snippet + " ..."
+    return snippet
+
+
+def build_match_info(bm: Bookmark, query: str) -> dict:
+    """Pick the best single-field excerpt to show under a search hit.
+
+    Priority: transcript (real content) > summary > description > title > tags.
+    Returns a dict with snippet / terms / field or empty values if no hit.
+    """
+    terms = _match_terms(query)
+    if not terms:
+        return {"snippet": None, "terms": [], "field": None}
+
+    fields = [
+        ("transcript", bm.transcript or ""),
+        ("summary", bm.summary or ""),
+        ("description", bm.description or ""),
+        ("title", bm.title or ""),
+        ("tags", " ".join(bm.tags or [])),
+    ]
+    for field_name, text in fields:
+        snippet = _excerpt_around(text, terms)
+        if snippet:
+            return {"snippet": snippet, "terms": terms, "field": field_name}
+    return {"snippet": None, "terms": terms, "field": None}

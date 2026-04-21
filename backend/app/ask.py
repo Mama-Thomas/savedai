@@ -35,14 +35,31 @@ _META_PATTERNS = re.compile(
 _MAX_META_BOOKMARKS = 40
 
 
+# How much transcript to quote per source in the RAG prompt. We keep this
+# small so a handful of video bookmarks doesn't blow past the model's input.
+_TRANSCRIPT_SNIPPET_CHARS = 1500
+
+
 def _format_source(i: int, bm: Bookmark) -> str:
     tags = ", ".join(bm.tags or [])
-    return (
+    base = (
         f"[{i}] Title: {bm.title or bm.url}\n"
         f"    URL: {bm.url}\n"
         f"    Summary: {bm.summary or bm.description or '(no summary)'}\n"
         f"    Tags: {tags}"
     )
+    transcript = (bm.transcript or "").strip()
+    if transcript:
+        snippet = transcript[:_TRANSCRIPT_SNIPPET_CHARS]
+        if len(transcript) > _TRANSCRIPT_SNIPPET_CHARS:
+            snippet += " ..."
+        label = {
+            "youtube": "Transcript",
+            "article": "Article excerpt",
+            "caption": "Caption",
+        }.get(bm.transcript_source or "", "Excerpt")
+        base += f"\n    {label}: {snippet}"
+    return base
 
 
 def _collection_overview(db: Session, user_id: int) -> str:
