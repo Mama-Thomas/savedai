@@ -41,6 +41,19 @@ export const fetchCollectionSummary = (id) =>
 
 export const deleteCollection = (id) => api.delete(`/collections/${id}`)
 
+// Shared collections (public read-only)
+export const shareCollection = (id) =>
+  api.post(`/collections/${id}/share`).then((r) => r.data)
+
+export const unshareCollection = (id) => api.delete(`/collections/${id}/share`)
+
+// Public endpoint: no auth token attached.
+export const fetchSharedCollection = async (token) => {
+  const baseURL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+  const response = await axios.get(`${baseURL}/public/collections/${token}`)
+  return response.data
+}
+
 // RAG chat. collection_id: null = all, 0 = uncategorized, >0 = specific
 export const askBookmarks = (question, collection_id = null) =>
   api.post('/ask', { question, collection_id }).then(r => r.data)

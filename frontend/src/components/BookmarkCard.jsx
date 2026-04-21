@@ -29,6 +29,39 @@ function getFaviconUrl(url) {
   }
 }
 
+// Render a snippet with the given terms highlighted. Case-insensitive, safe
+// (no innerHTML). Matches are wrapped in a yellow <mark> so the user can see
+// where the hit came from.
+function Highlighted({ text, terms }) {
+  if (!text) return null
+  const cleanedTerms = (terms || []).filter(Boolean)
+  if (!cleanedTerms.length) return <>{text}</>
+  const escaped = cleanedTerms
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .sort((a, b) => b.length - a.length)
+  const pattern = new RegExp(`(${escaped.join('|')})`, 'gi')
+  const parts = text.split(pattern)
+  return (
+    <>
+      {parts.map((part, i) =>
+        pattern.test(part) ? (
+          <mark key={i} className="bg-yellow-100 text-slate-800 rounded px-0.5">
+            {part}
+          </mark>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  )
+}
+
+const TRANSCRIPT_SOURCE_LABEL = {
+  youtube: 'Transcript',
+  article: 'Article',
+  caption: 'Caption',
+}
+
 export default function BookmarkCard({
   bookmark,
   onDelete,
@@ -159,13 +192,34 @@ export default function BookmarkCard({
           rel="noopener noreferrer"
           className="font-semibold text-slate-800 text-sm leading-snug line-clamp-2 hover:text-sky-600 transition-colors"
         >
-          {bookmark.title || bookmark.url}
+          <Highlighted
+            text={bookmark.title || bookmark.url}
+            terms={bookmark.match_terms}
+          />
         </a>
+
+        {/* Transcript / source badge */}
+        {bookmark.transcript_source && TRANSCRIPT_SOURCE_LABEL[bookmark.transcript_source] && (
+          <span
+            className="self-start text-[10px] font-medium px-1.5 py-0.5 rounded-full
+                       bg-emerald-50 text-emerald-600 border border-emerald-100"
+            title="AI summary used the full content"
+          >
+            {TRANSCRIPT_SOURCE_LABEL[bookmark.transcript_source]}
+          </span>
+        )}
+
+        {/* Search match snippet (only shown during a search hit) */}
+        {bookmark.match_snippet && (
+          <p className="text-xs text-slate-500 leading-relaxed italic border-l-2 border-yellow-200 pl-2">
+            <Highlighted text={bookmark.match_snippet} terms={bookmark.match_terms} />
+          </p>
+        )}
 
         {/* AI Summary */}
         {bookmark.summary && (
           <p className="text-xs text-slate-500 leading-relaxed">
-            {bookmark.summary}
+            <Highlighted text={bookmark.summary} terms={bookmark.match_terms} />
           </p>
         )}
 
@@ -277,18 +331,20 @@ export default function BookmarkCard({
                 </svg>
               )}
             </button>
-            <button
-              onClick={handleDelete}
-              disabled={deleting}
-              title="Delete bookmark"
-              className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-300
-                         hover:text-red-400 hover:bg-red-50 transition-all cursor-pointer"
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-            </button>
+            {onDelete && (
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                title="Delete bookmark"
+                className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-300
+                           hover:text-red-400 hover:bg-red-50 transition-all cursor-pointer"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
       </div>

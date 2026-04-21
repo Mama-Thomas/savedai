@@ -5,7 +5,9 @@ import AuthPage from './components/AuthPage'
 import BookmarkCard from './components/BookmarkCard'
 import CollectionSummary from './components/CollectionSummary'
 import CollectionsSidebar from './components/CollectionsSidebar'
+import DateControls from './components/DateControls'
 import SearchBar from './components/SearchBar'
+import ShareModal from './components/ShareModal'
 import TagFilter from './components/TagFilter'
 import { useAuth } from './contexts/AuthContext'
 import {
@@ -38,6 +40,13 @@ export default function App() {
   const [exportFormat, setExportFormat] = useState('json')
   // { bookmarkId, type: 'existing'|'new', collection_id, name, reason } | null
   const [suggestion, setSuggestion] = useState(null)
+  // Browse-by-date controls.
+  const [sortOrder, setSortOrder] = useState('newest') // 'newest' | 'oldest'
+  const [groupBy, setGroupBy] = useState('none') // 'none' | 'day' | 'week' | 'month'
+  const [startDate, setStartDate] = useState(null) // 'YYYY-MM-DD' | null
+  const [endDate, setEndDate] = useState(null)
+  // Share modal state: holds the collection being shared, or null.
+  const [sharingCollection, setSharingCollection] = useState(null)
 
   useEffect(() => {
     if (!user) return
@@ -217,22 +226,87 @@ export default function App() {
     }
   }
 
-  // Filter bookmarks by active collection + active tag on the client.
+  // Filter bookmarks by active collection + active tag + date range + sort.
   const visibleBookmarks = useMemo(() => {
     let list = bookmarks
+
+    // Collection / quick view scope.
     if (activeCollectionId === 0) {
       list = list.filter((bm) => !bm.collection_id)
+    } else if (activeCollectionId === -1) {
+      // 'Recently saved' quick view: last 30 days across all collections.
+      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
+      list = list.filter((bm) => new Date(bm.created_at).getTime() >= cutoff)
     } else if (typeof activeCollectionId === 'number' && activeCollectionId > 0) {
       list = list.filter((bm) => bm.collection_id === activeCollectionId)
     }
+
+    // Tag filter.
     if (activeTag) {
       const target = activeTag.toLowerCase()
       list = list.filter(
         (bm) => Array.isArray(bm.tags) && bm.tags.some((t) => (t || '').toLowerCase() === target)
       )
     }
+
+    // Date range. Both inclusive; end date is interpreted as end-of-day.
+    if (startDate) {
+      const startMs = new Date(startDate + 'T00:00:00').getTime()
+      list = list.filter((bm) => new Date(bm.created_at).getTime() >= startMs)
+    }
+    if (endDate) {
+      const endMs = new Date(endDate + 'T23:59:59').getTime()
+      list = list.filter((bm) => new Date(bm.created_at).getTime() <= endMs)
+    }
+
+    // Sort. If a search query is active we keep the relevance order the server
+    // returned; otherwise we apply the chosen chronological sort.
+    if (!searchQuery.trim()) {
+      const dir = sortOrder === 'oldest' ? 1 : -1
+      list = [...list].sort(
+        (a, b) =>
+          (new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) * dir
+      )
+    }
     return list
-  }, [bookmarks, activeCollectionId, activeTag])
+  }, [bookmarks, activeCollectionId, activeTag, startDate, endDate, sortOrder, searchQuery])
+
+  // Compute grouped buckets when grouping is enabled. Shape: [{ label, items }]
+  const groupedBookmarks = useMemo(() => {
+    if (groupBy === 'none') return null
+    const buckets = new Map()
+    for (const bm of visibleBookmarks) {
+      const d = new Date(bm.created_at)
+      let key = ''
+      let label = ''
+      if (groupBy === 'day') {
+        key = d.toISOString().slice(0, 10)
+        label = d.toLocaleDateString('en-US', {
+          weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+        })
+      } else if (groupBy === 'week') {
+        // Key by ISO week start (Monday).
+        const day = d.getDay() || 7
+        const monday = new Date(d)
+        monday.setHours(0, 0, 0, 0)
+        monday.setDate(d.getDate() - (day - 1))
+        key = monday.toISOString().slice(0, 10)
+        const sunday = new Date(monday)
+        sunday.setDate(monday.getDate() + 6)
+        label = `Week of ${monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${sunday.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+      } else {
+        key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        label = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+      }
+      if (!buckets.has(key)) buckets.set(key, { label, items: [] })
+      buckets.get(key).items.push(bm)
+    }
+    const sorted = Array.from(buckets.entries())
+    sorted.sort(([a], [b]) => (sortOrder === 'oldest' ? a.localeCompare(b) : b.localeCompare(a)))
+    return sorted.map(([, v]) => v)
+  }, [visibleBookmarks, groupBy, sortOrder])
+
+  const clearDateRange = () => { setStartDate(null); setEndDate(null) }
 
   if (authLoading) {
     return (
@@ -249,6 +323,7 @@ export default function App() {
 
   const collectionLabel = (() => {
     if (activeCollectionId === null) return 'All bookmarks'
+    if (activeCollectionId === -1) return 'Recently saved'
     if (activeCollectionId === 0) return 'Uncategorized'
     return collections.find((c) => c.id === activeCollectionId)?.name || 'Collection'
   })()
@@ -325,6 +400,7 @@ export default function App() {
           onCreate={handleCreateCollection}
           onRename={handleRenameCollection}
           onDelete={handleDeleteCollection}
+          onShare={(c) => setSharingCollection(c)}
         />
 
         <div className="flex-1 min-w-0">
@@ -376,14 +452,15 @@ export default function App() {
           )}
 
           {/* Cutesy per-collection summary (shown when a specific collection
-              or Uncategorized is selected). */}
+              or Uncategorized is selected). Hidden for 'Recently saved'. */}
           <CollectionSummary
-            collectionId={activeCollectionId}
+            collectionId={activeCollectionId === -1 ? null : activeCollectionId}
             label={collectionLabel}
             bookmarkCount={
               bookmarks.filter((bm) => {
                 if (activeCollectionId === 0) return !bm.collection_id
                 if (activeCollectionId === null) return true
+                if (activeCollectionId === -1) return true
                 return bm.collection_id === activeCollectionId
               }).length
             }
@@ -490,19 +567,64 @@ export default function App() {
                     ? `${visibleBookmarks.length} tagged #${activeTag}`
                     : `${visibleBookmarks.length} in ${collectionLabel}`}
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {visibleBookmarks.map((bm) => (
-                  <BookmarkCard
-                    key={bm.id}
-                    bookmark={bm}
-                    onDelete={handleDelete}
-                    onTagClick={handleTagClick}
-                    collections={collections}
-                    onMove={handleMoveBookmark}
-                    onCreateCollection={handleCreateCollection}
-                  />
-                ))}
-              </div>
+
+              {/* Date / sort / group controls — hidden while the user is searching
+                  because search results come back in relevance order. */}
+              {!searchQuery.trim() && (
+                <DateControls
+                  sortOrder={sortOrder}
+                  setSortOrder={setSortOrder}
+                  groupBy={groupBy}
+                  setGroupBy={setGroupBy}
+                  startDate={startDate}
+                  setStartDate={setStartDate}
+                  endDate={endDate}
+                  setEndDate={setEndDate}
+                  onClearRange={clearDateRange}
+                />
+              )}
+
+              {groupedBookmarks && !searchQuery.trim() ? (
+                <div className="space-y-6">
+                  {groupedBookmarks.map((bucket) => (
+                    <section key={bucket.label}>
+                      <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+                        {bucket.label}
+                        <span className="ml-2 text-slate-300 font-normal normal-case">
+                          {bucket.items.length}
+                        </span>
+                      </h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {bucket.items.map((bm) => (
+                          <BookmarkCard
+                            key={bm.id}
+                            bookmark={bm}
+                            onDelete={handleDelete}
+                            onTagClick={handleTagClick}
+                            collections={collections}
+                            onMove={handleMoveBookmark}
+                            onCreateCollection={handleCreateCollection}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {visibleBookmarks.map((bm) => (
+                    <BookmarkCard
+                      key={bm.id}
+                      bookmark={bm}
+                      onDelete={handleDelete}
+                      onTagClick={handleTagClick}
+                      collections={collections}
+                      onMove={handleMoveBookmark}
+                      onCreateCollection={handleCreateCollection}
+                    />
+                  ))}
+                </div>
+              )}
             </>
           )}
         </div>
@@ -514,6 +636,19 @@ export default function App() {
         collections={collections}
         initialCollectionId={activeCollectionId}
       />
+
+      {sharingCollection && (
+        <ShareModal
+          collection={sharingCollection}
+          onClose={() => setSharingCollection(null)}
+          onUpdate={(updated) => {
+            setCollections((prev) =>
+              prev.map((c) => (c.id === updated.id ? updated : c))
+            )
+            setSharingCollection(updated)
+          }}
+        />
+      )}
 
       <footer className="mt-16 pb-8 text-center text-xs text-slate-300">
         SavedAI, save smarter with AI

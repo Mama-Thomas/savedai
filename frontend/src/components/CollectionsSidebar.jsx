@@ -7,6 +7,7 @@ export default function CollectionsSidebar({
   onCreate,
   onRename,
   onDelete,
+  onShare,
 }) {
   const [newName, setNewName] = useState('')
   const [adding, setAdding] = useState(false)
@@ -85,7 +86,7 @@ export default function CollectionsSidebar({
     }
   }
 
-  const item = (key, label, onClick, onRemove, onEdit, collection) => {
+  const item = (key, label, onClick, onRemove, onEdit, collection, onShareItem) => {
     const active = activeCollectionId === key
     if (collection && renamingId === collection.id) {
       return (
@@ -149,8 +150,28 @@ export default function CollectionsSidebar({
             ${active ? 'bg-sky-50 text-sky-700' : 'text-slate-600 hover:bg-slate-100'}`}
           onClick={onClick}
         >
-          <span className="truncate">{label}</span>
+          <span className="truncate flex items-center gap-1">
+            {label}
+            {collection?.share_token && (
+              <span
+                title="Shared publicly"
+                className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400"
+              />
+            )}
+          </span>
           <div className="flex items-center gap-1">
+            {onShareItem && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onShareItem() }}
+                className={`${collection?.share_token ? 'text-emerald-500 opacity-100' : 'text-slate-300 opacity-0 group-hover:opacity-100'} hover:text-emerald-500 cursor-pointer`}
+                title={collection?.share_token ? 'Manage share link' : 'Share collection'}
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M4 12v7a2 2 0 002 2h12a2 2 0 002-2v-7M16 6l-4-4m0 0L8 6m4-4v13" />
+                </svg>
+              </button>
+            )}
             {onEdit && (
               <button
                 onClick={(e) => { e.stopPropagation(); onEdit() }}
@@ -189,6 +210,7 @@ export default function CollectionsSidebar({
         </p>
         <ul className="space-y-0.5">
           {item(null, 'All bookmarks', () => onSelect(null))}
+          {item(-1, 'Recently saved', () => onSelect(-1))}
           {item(0, 'Uncategorized', () => onSelect(0))}
           {collections.map((c) =>
             item(
@@ -197,7 +219,8 @@ export default function CollectionsSidebar({
               () => onSelect(c.id),
               () => onDelete(c.id),
               onRename ? () => startRename(c) : undefined,
-              c
+              c,
+              onShare ? () => onShare(c) : undefined
             )
           )}
         </ul>
