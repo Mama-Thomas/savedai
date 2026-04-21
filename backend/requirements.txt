@@ -17,3 +17,5 @@ python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 slowapi==0.1.9
 reportlab==4.2.0
+youtube-transcript-api==0.6.2
+trafilatura==1.12.2
