@@ -17,6 +17,7 @@ _MAX_URL_LENGTH = 2048
 
 class BookmarkCreate(BaseModel):
     url: str
+    collection_id: Optional[int] = None
 
     @field_validator("url")
     @classmethod
@@ -38,9 +39,77 @@ class BookmarkResponse(BaseModel):
     summary: Optional[str] = None
     tags: Optional[List[str]] = []
     created_at: datetime
+    collection_id: Optional[int] = None
 
     class Config:
         from_attributes = True
+
+
+class BookmarkUpdate(BaseModel):
+    collection_id: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
+# Collections
+# ---------------------------------------------------------------------------
+
+class CollectionCreate(BaseModel):
+    name: str
+    # If true, bypass the "similar name already exists" guard.
+    force: Optional[bool] = False
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v or len(v) > 100:
+            raise ValueError("Name must be 1-100 characters")
+        return v
+
+
+class CollectionUpdate(BaseModel):
+    name: str
+    force: Optional[bool] = False
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v or len(v) > 100:
+            raise ValueError("Name must be 1-100 characters")
+        return v
+
+
+class CollectionResponse(BaseModel):
+    id: int
+    name: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ---------------------------------------------------------------------------
+# RAG "Ask your bookmarks"
+# ---------------------------------------------------------------------------
+
+class AskRequest(BaseModel):
+    question: str
+    # Optional scope. null = all bookmarks, 0 = uncategorized, >0 = specific collection id
+    collection_id: Optional[int] = None
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, v: str) -> str:
+        v = v.strip()
+        if not v or len(v) > 500:
+            raise ValueError("Question must be 1-500 characters")
+        return v
+
+
+class AskResponse(BaseModel):
+    answer: str
+    sources: List[BookmarkResponse]
 
 
 # ---------------------------------------------------------------------------

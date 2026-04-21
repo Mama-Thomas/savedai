@@ -75,54 +75,64 @@ def keyword_search(db: Session, query: str, user_id: int, limit: int = 50) -> Li
 # FAISS-based semantic search (optional, built on OpenAI embeddings)
 # ---------------------------------------------------------------------------
 
+def build_bookmark_text(bm: Bookmark) -> str:
+    parts = filter(None, [bm.title, bm.summary, bm.description, " ".join(bm.tags or [])])
+    return " ".join(parts) or bm.url
+
+
+def embed_texts(texts: List[str]) -> "np.ndarray":
+    """Embed texts via OpenAI and return unit-normalized vectors."""
+    from openai import OpenAI
+    from app.config import settings
+
+    oai = OpenAI(api_key=settings.OPENAI_API_KEY)
+    response = oai.embeddings.create(input=texts, model="text-embedding-3-small")
+    vectors = np.array([d.embedding for d in response.data], dtype="float32")
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    norms = np.where(norms == 0, 1, norms)
+    return vectors / norms
+
+
+def embed_single(text: str) -> List[float]:
+    """Embed a single string and return a plain python list for DB storage."""
+    if not FAISS_AVAILABLE:
+        return []
+    try:
+        vec = embed_texts([text])[0]
+        return [float(x) for x in vec]
+    except Exception:
+        return []
+
+
 class FAISSIndex:
-    """In-memory FAISS index rebuilt per-user on each search request."""
+    """Build a FAISS index from pre-computed embeddings stored on Bookmark rows."""
 
     def __init__(self):
         self._index: Optional["faiss.IndexFlatIP"] = None
         self._ids: List[int] = []
 
-    def _embed(self, texts: List[str]) -> "np.ndarray":
-        from openai import OpenAI
-        from app.config import settings
-
-        oai = OpenAI(api_key=settings.OPENAI_API_KEY)
-        response = oai.embeddings.create(
-            input=texts,
-            model="text-embedding-3-small",
-        )
-        vectors = np.array([d.embedding for d in response.data], dtype="float32")
-        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-        norms = np.where(norms == 0, 1, norms)
-        return vectors / norms
-
     def build(self, bookmarks: List[Bookmark]):
-        if not bookmarks:
+        usable = [bm for bm in bookmarks if bm.embedding]
+        if not usable:
             self._index = None
             self._ids = []
             return
-
-        texts = []
-        for bm in bookmarks:
-            parts = filter(None, [bm.title, bm.summary, bm.description, " ".join(bm.tags or [])])
-            texts.append(" ".join(parts) or bm.url)
-
-        vectors = self._embed(texts)
+        vectors = np.array([bm.embedding for bm in usable], dtype="float32")
         dim = vectors.shape[1]
         index = faiss.IndexFlatIP(dim)
         index.add(vectors)
         self._index = index
-        self._ids = [bm.id for bm in bookmarks]
+        self._ids = [bm.id for bm in usable]
 
-    def query(self, query_text: str, k: int = 10) -> List[int]:
+    def query(self, query_text: str, k: int = 10, threshold: float = 0.38) -> List[int]:
         if self._index is None or not self._ids:
             return []
-        q_vec = self._embed([query_text])
+        q_vec = embed_texts([query_text])
         k = min(k, len(self._ids))
         distances, indices = self._index.search(q_vec, k)
         results = []
         for dist, idx in zip(distances[0], indices[0]):
-            if idx == -1 or dist < 0.38:
+            if idx == -1 or dist < threshold:
                 continue
             results.append(self._ids[idx])
         return results
