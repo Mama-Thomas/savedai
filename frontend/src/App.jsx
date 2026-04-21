@@ -1,36 +1,58 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import AddBookmark from './components/AddBookmark'
+import AskModal from './components/AskModal'
 import AuthPage from './components/AuthPage'
 import BookmarkCard from './components/BookmarkCard'
+import CollectionSummary from './components/CollectionSummary'
+import CollectionsSidebar from './components/CollectionsSidebar'
 import SearchBar from './components/SearchBar'
+import TagFilter from './components/TagFilter'
 import { useAuth } from './contexts/AuthContext'
 import {
   createBookmark,
+  createCollection,
   deleteBookmark,
+  deleteCollection,
+  downloadExport,
   fetchBookmarks,
+  fetchCollections,
+  renameCollection,
   searchBookmarks,
+  suggestCollection,
+  updateBookmark,
 } from './api/bookmarks'
 
 export default function App() {
   const { user, loading: authLoading, logout } = useAuth()
 
   const [bookmarks, setBookmarks] = useState([])
+  const [collections, setCollections] = useState([])
+  const [activeCollectionId, setActiveCollectionId] = useState(null) // null=all, 0=uncategorized, id=specific
+  const [activeTag, setActiveTag] = useState(null) // exact-match tag filter
   const [loading, setLoading] = useState(false)
   const [searching, setSearching] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [error, setError] = useState('')
+  const [askOpen, setAskOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportFormat, setExportFormat] = useState('json')
+  // { bookmarkId, type: 'existing'|'new', collection_id, name, reason } | null
+  const [suggestion, setSuggestion] = useState(null)
 
-  // Load bookmarks when user is authenticated
   useEffect(() => {
     if (!user) return
     setLoading(true)
-    fetchBookmarks()
-      .then(setBookmarks)
+    Promise.all([fetchBookmarks(), fetchCollections()])
+      .then(([bms, cols]) => {
+        setBookmarks(bms)
+        setCollections(cols)
+      })
       .catch(() => setError('Could not load bookmarks.'))
       .finally(() => setLoading(false))
   }, [user])
 
   const handleSearch = useCallback(async (query) => {
+    setActiveTag(null) // typing a search clears tag filter
     setSearchQuery(query)
     if (!query.trim()) {
       setSearching(true)
@@ -53,10 +75,58 @@ export default function App() {
     }
   }, [])
 
-  const handleAdd = async (url) => {
-    const newBm = await createBookmark(url)
+  const handleAdd = async (url, collection_id) => {
+    // Explicit collection_id from AddBookmark takes priority.
+    // Fall back to whatever sidebar collection is active.
+    let cid = collection_id
+    if (cid === undefined) {
+      cid = typeof activeCollectionId === 'number' && activeCollectionId > 0
+        ? activeCollectionId
+        : null
+    }
+    const newBm = await createBookmark(url, cid || null)
     setBookmarks((prev) => [newBm, ...prev])
     setSearchQuery('')
+    setActiveTag(null)
+
+    // Ask backend for a smart suggestion regardless of where it landed.
+    try {
+      const s = await suggestCollection(newBm.id)
+      if (!s) return
+      const savedCid = newBm.collection_id || null
+      // Case A: saved uncategorized -> always surface suggestion.
+      if (!savedCid) {
+        setSuggestion({ ...s, bookmarkId: newBm.id, mode: 'uncategorized' })
+        return
+      }
+      // Case B: saved into a specific collection, but the AI thinks it belongs
+      // somewhere else. Surface a mismatch banner in two sub-cases:
+      //   - suggestion is an existing collection different from where it was saved
+      //   - suggestion is a new collection (AI couldn't match anywhere existing)
+      const savedColl = collections.find((c) => c.id === savedCid)
+      const savedCollName = savedColl?.name || 'that collection'
+      if (
+        s.type === 'existing' &&
+        s.collection_id &&
+        s.collection_id !== savedCid
+      ) {
+        setSuggestion({
+          ...s,
+          bookmarkId: newBm.id,
+          mode: 'mismatch',
+          savedCollectionName: savedCollName,
+        })
+      } else if (s.type === 'new') {
+        setSuggestion({
+          ...s,
+          bookmarkId: newBm.id,
+          mode: 'mismatch',
+          savedCollectionName: savedCollName,
+        })
+      }
+    } catch {
+      // Suggestion is best effort, ignore failures.
+    }
   }
 
   const handleDelete = async (id) => {
@@ -64,7 +134,106 @@ export default function App() {
     setBookmarks((prev) => prev.filter((bm) => bm.id !== id))
   }
 
-  // Full-screen spinner while validating stored token
+  const handleCreateCollection = async (name, opts = {}) => {
+    const c = await createCollection(name, opts)
+    setCollections((prev) => [...prev, c])
+    return c
+  }
+
+  const handleRenameCollection = async (id, name, opts = {}) => {
+    const c = await renameCollection(id, name, opts)
+    setCollections((prev) => prev.map((col) => (col.id === id ? c : col)))
+    return c
+  }
+
+  const acceptSuggestion = async () => {
+    if (!suggestion) return
+    try {
+      let targetId = suggestion.collection_id
+      if (suggestion.type === 'new') {
+        // User explicitly accepted creating this name, so force past any
+        // similar-name guard the backend might flag.
+        const c = await handleCreateCollection(suggestion.name, { force: true })
+        targetId = c.id
+      }
+      if (targetId) {
+        const updated = await updateBookmark(suggestion.bookmarkId, { collection_id: targetId })
+        setBookmarks((prev) => prev.map((bm) => (bm.id === suggestion.bookmarkId ? updated : bm)))
+      }
+    } catch {
+      setError('Could not move bookmark into that collection.')
+    } finally {
+      setSuggestion(null)
+    }
+  }
+
+  const handleDeleteCollection = async (id) => {
+    if (!confirm('Delete this collection? Bookmarks will move to Uncategorized.')) return
+    await deleteCollection(id)
+    setCollections((prev) => prev.filter((c) => c.id !== id))
+    // Any bookmarks that pointed here are now orphaned
+    setBookmarks((prev) =>
+      prev.map((bm) => (bm.collection_id === id ? { ...bm, collection_id: null } : bm))
+    )
+    if (activeCollectionId === id) setActiveCollectionId(null)
+  }
+
+  // Exact-match tag filter on the client. Bypasses semantic/keyword search
+  // so every bookmark carrying the exact tag is shown.
+  const handleTagClick = async (tag) => {
+    // Make sure we're working against the full list, not a search result set.
+    if (searchQuery) {
+      setSearchQuery('')
+      try {
+        const data = await fetchBookmarks()
+        setBookmarks(data)
+      } catch {
+        // ignore
+      }
+    }
+    setActiveTag(tag)
+  }
+
+  const clearTagFilter = () => setActiveTag(null)
+
+  const handleMoveBookmark = async (bookmarkId, collectionId) => {
+    const updated = await updateBookmark(bookmarkId, { collection_id: collectionId || 0 })
+    setBookmarks((prev) => prev.map((bm) => (bm.id === bookmarkId ? updated : bm)))
+  }
+
+  const handleExport = async (format = 'json') => {
+    setExporting(true)
+    try {
+      await downloadExport(format)
+    } catch (err) {
+      const detail = err?.response?.data?.detail
+      setError(
+        detail
+          ? `Export failed: ${detail}`
+          : 'Export failed. Please try again.'
+      )
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  // Filter bookmarks by active collection + active tag on the client.
+  const visibleBookmarks = useMemo(() => {
+    let list = bookmarks
+    if (activeCollectionId === 0) {
+      list = list.filter((bm) => !bm.collection_id)
+    } else if (typeof activeCollectionId === 'number' && activeCollectionId > 0) {
+      list = list.filter((bm) => bm.collection_id === activeCollectionId)
+    }
+    if (activeTag) {
+      const target = activeTag.toLowerCase()
+      list = list.filter(
+        (bm) => Array.isArray(bm.tags) && bm.tags.some((t) => (t || '').toLowerCase() === target)
+      )
+    }
+    return list
+  }, [bookmarks, activeCollectionId, activeTag])
+
   if (authLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -76,16 +245,18 @@ export default function App() {
     )
   }
 
-  // Not authenticated — show login/register
-  if (!user) {
-    return <AuthPage />
-  }
+  if (!user) return <AuthPage />
+
+  const collectionLabel = (() => {
+    if (activeCollectionId === null) return 'All bookmarks'
+    if (activeCollectionId === 0) return 'Uncategorized'
+    return collections.find((c) => c.id === activeCollectionId)?.name || 'Collection'
+  })()
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Header */}
       <header className="bg-white border-b border-slate-100 sticky top-0 z-10 shadow-sm">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center gap-3">
+        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center gap-3">
           <div className="flex items-center gap-2 shrink-0">
             <div className="h-8 w-8 rounded-lg bg-sky-500 flex items-center justify-center shadow-sm">
               <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -99,15 +270,43 @@ export default function App() {
             AI-powered bookmarks
           </span>
 
-          {/* User + logout */}
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={() => setAskOpen(true)}
+              className="text-xs font-medium text-white bg-indigo-500 hover:bg-indigo-600 px-3 py-1.5 rounded-lg transition cursor-pointer"
+            >
+              Ask AI
+            </button>
+            <div className="flex items-stretch rounded-lg border border-slate-200 overflow-hidden">
+              <select
+                value={exportFormat}
+                onChange={(e) => setExportFormat(e.target.value)}
+                disabled={exporting}
+                className="text-xs text-slate-600 bg-white px-2 py-1.5 border-r border-slate-200 focus:outline-none cursor-pointer disabled:opacity-50"
+                title="Export format"
+              >
+                <option value="json">JSON</option>
+                <option value="csv">CSV</option>
+                <option value="html">HTML (browser import)</option>
+                <option value="markdown">Markdown</option>
+                <option value="txt">TXT</option>
+                <option value="pdf">PDF</option>
+              </select>
+              <button
+                onClick={() => handleExport(exportFormat)}
+                disabled={exporting}
+                className="text-xs text-slate-500 hover:text-slate-800 hover:bg-slate-50 px-3 py-1.5 transition cursor-pointer disabled:opacity-50"
+                title={`Export as ${exportFormat.toUpperCase()}`}
+              >
+                {exporting ? 'Exporting...' : 'Export'}
+              </button>
+            </div>
             <span className="hidden sm:inline text-xs text-slate-400 truncate max-w-[160px]">
               {user.email}
             </span>
             <button
               onClick={logout}
-              className="text-xs text-slate-400 hover:text-slate-700 px-3 py-1.5 rounded-lg
-                         border border-slate-200 hover:border-slate-300 transition cursor-pointer"
+              className="text-xs text-slate-400 hover:text-slate-700 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-slate-300 transition cursor-pointer"
             >
               Sign out
             </button>
@@ -115,81 +314,209 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-8">
-        {/* Add + Search row */}
-        <div className="flex flex-col sm:flex-row gap-3 mb-8">
-          <div className="flex-1">
-            <AddBookmark onAdd={handleAdd} />
-          </div>
-          <div className="sm:w-72">
-            <SearchBar onSearch={handleSearch} loading={searching} />
-          </div>
-        </div>
+      <main className="max-w-7xl mx-auto px-4 py-8 flex flex-col sm:flex-row gap-6">
+        <CollectionsSidebar
+          collections={collections}
+          activeCollectionId={activeCollectionId}
+          onSelect={(id) => {
+            setActiveCollectionId(id)
+            setActiveTag(null)
+          }}
+          onCreate={handleCreateCollection}
+          onRename={handleRenameCollection}
+          onDelete={handleDeleteCollection}
+        />
 
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl text-sm text-red-600">
-            {error}
-          </div>
-        )}
-
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-24 gap-3">
-            <svg className="animate-spin h-8 w-8 text-sky-400" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-            </svg>
-            <p className="text-sm text-slate-400">Loading bookmarks…</p>
-          </div>
-        ) : bookmarks.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
-            {searchQuery ? (
-              <>
-                <div className="h-14 w-14 rounded-2xl bg-slate-100 flex items-center justify-center">
-                  <svg className="h-7 w-7 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                      d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
-                  </svg>
-                </div>
-                <div>
-                  <p className="font-semibold text-slate-600">No results for "{searchQuery}"</p>
-                  <p className="text-sm text-slate-400 mt-1">Try different keywords or clear the search.</p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="h-14 w-14 rounded-2xl bg-sky-50 flex items-center justify-center">
-                  <svg className="h-7 w-7 text-sky-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                      d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-                  </svg>
-                </div>
-                <div>
-                  <p className="font-semibold text-slate-600">No bookmarks yet</p>
-                  <p className="text-sm text-slate-400 mt-1">
-                    Paste any URL above to get started — SavedAI will summarize it automatically.
-                  </p>
-                </div>
-              </>
-            )}
-          </div>
-        ) : (
-          <>
-            <p className="text-xs text-slate-400 mb-4">
-              {searchQuery
-                ? `${bookmarks.length} result${bookmarks.length !== 1 ? 's' : ''} for "${searchQuery}"`
-                : `${bookmarks.length} bookmark${bookmarks.length !== 1 ? 's' : ''} saved`}
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {bookmarks.map((bm) => (
-                <BookmarkCard key={bm.id} bookmark={bm} onDelete={handleDelete} />
-              ))}
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-col sm:flex-row gap-3 mb-6">
+            <div className="flex-1">
+              <AddBookmark
+                onAdd={handleAdd}
+                collections={collections}
+                defaultCollectionId={
+                  typeof activeCollectionId === 'number' && activeCollectionId > 0
+                    ? activeCollectionId
+                    : null
+                }
+                onCreateCollection={handleCreateCollection}
+              />
             </div>
-          </>
-        )}
+            <div className="sm:w-72 flex items-center gap-2">
+              <div className="flex-1">
+                <SearchBar onSearch={handleSearch} loading={searching} />
+              </div>
+              <TagFilter
+                bookmarks={bookmarks}
+                activeTag={activeTag}
+                onSelect={(tag) => {
+                  if (tag === null) {
+                    setActiveTag(null)
+                    return
+                  }
+                  handleTagClick(tag)
+                }}
+              />
+            </div>
+          </div>
+
+          {activeTag && (
+            <div className="mb-4 flex items-center gap-2">
+              <span className="text-xs text-slate-500">Filtering by tag:</span>
+              <button
+                onClick={clearTagFilter}
+                className="group inline-flex items-center gap-1 px-2 py-0.5 bg-sky-100 text-sky-700 text-xs font-medium rounded-full border border-sky-200 hover:bg-sky-200 transition cursor-pointer"
+                title="Clear tag filter"
+              >
+                #{activeTag}
+                <svg className="h-3 w-3 opacity-60 group-hover:opacity-100" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          )}
+
+          {/* Cutesy per-collection summary (shown when a specific collection
+              or Uncategorized is selected). */}
+          <CollectionSummary
+            collectionId={activeCollectionId}
+            label={collectionLabel}
+            bookmarkCount={
+              bookmarks.filter((bm) => {
+                if (activeCollectionId === 0) return !bm.collection_id
+                if (activeCollectionId === null) return true
+                return bm.collection_id === activeCollectionId
+              }).length
+            }
+          />
+
+          {suggestion && (
+            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-3 text-sm">
+              <svg className="h-5 w-5 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+              </svg>
+              <div className="flex-1 text-slate-700">
+                {suggestion.mode === 'mismatch' && suggestion.type === 'existing' ? (
+                  <>This doesn't look like <span className="font-semibold">{suggestion.savedCollectionName}</span>. It fits <span className="font-semibold">{suggestion.name}</span> better. Move it?</>
+                ) : suggestion.mode === 'mismatch' && suggestion.type === 'new' ? (
+                  <>This doesn't look like <span className="font-semibold">{suggestion.savedCollectionName}</span>. Create a new <span className="font-semibold">{suggestion.name}</span> collection and move it there?</>
+                ) : suggestion.type === 'existing' ? (
+                  <>Looks like this bookmark belongs in <span className="font-semibold">{suggestion.name}</span>. Move it there?</>
+                ) : (
+                  <>No matching collection. Create a new one called <span className="font-semibold">{suggestion.name}</span>?</>
+                )}
+              </div>
+              <button
+                onClick={acceptSuggestion}
+                className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-semibold cursor-pointer"
+              >
+                {suggestion.type === 'existing' ? 'Move it' : 'Create and move'}
+              </button>
+              <button
+                onClick={() => setSuggestion(null)}
+                className="text-xs text-slate-500 hover:text-slate-700 cursor-pointer"
+              >
+                {suggestion.mode === 'mismatch' ? 'Keep here' : 'Dismiss'}
+              </button>
+            </div>
+          )}
+
+          {error && (
+            <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl text-sm text-red-600">
+              {error}
+            </div>
+          )}
+
+          {loading ? (
+            <div className="flex flex-col items-center justify-center py-24 gap-3">
+              <svg className="animate-spin h-8 w-8 text-sky-400" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+              </svg>
+              <p className="text-sm text-slate-400">Loading bookmarks…</p>
+            </div>
+          ) : visibleBookmarks.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
+              {searchQuery ? (
+                <>
+                  <div className="h-14 w-14 rounded-2xl bg-slate-100 flex items-center justify-center">
+                    <svg className="h-7 w-7 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                        d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-slate-600">No results for "{searchQuery}"</p>
+                    <p className="text-sm text-slate-400 mt-1">Try different keywords or clear the search.</p>
+                  </div>
+                </>
+              ) : activeTag ? (
+                <>
+                  <div className="h-14 w-14 rounded-2xl bg-slate-100 flex items-center justify-center">
+                    <svg className="h-7 w-7 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                        d="M7 7h.01M7 3h5a1.994 1.994 0 011.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-slate-600">No bookmarks tagged #{activeTag}</p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="h-14 w-14 rounded-2xl bg-sky-50 flex items-center justify-center">
+                    <svg className="h-7 w-7 text-sky-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                        d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-slate-600">
+                      {activeCollectionId === null ? 'No bookmarks yet' : `No bookmarks in ${collectionLabel}`}
+                    </p>
+                    <p className="text-sm text-slate-400 mt-1">
+                      Paste any URL above to get started. SavedAI will summarize it automatically.
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
+              <p className="text-xs text-slate-400 mb-4">
+                {searchQuery
+                  ? `${visibleBookmarks.length} result${visibleBookmarks.length !== 1 ? 's' : ''} for "${searchQuery}"`
+                  : activeTag
+                    ? `${visibleBookmarks.length} tagged #${activeTag}`
+                    : `${visibleBookmarks.length} in ${collectionLabel}`}
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {visibleBookmarks.map((bm) => (
+                  <BookmarkCard
+                    key={bm.id}
+                    bookmark={bm}
+                    onDelete={handleDelete}
+                    onTagClick={handleTagClick}
+                    collections={collections}
+                    onMove={handleMoveBookmark}
+                    onCreateCollection={handleCreateCollection}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </main>
 
+      <AskModal
+        open={askOpen}
+        onClose={() => setAskOpen(false)}
+        collections={collections}
+        initialCollectionId={activeCollectionId}
+      />
+
       <footer className="mt-16 pb-8 text-center text-xs text-slate-300">
-        SavedAI — save smarter with AI
+        SavedAI, save smarter with AI
       </footer>
     </div>
   )
