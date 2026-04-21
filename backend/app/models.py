@@ -24,6 +24,9 @@ class Collection(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # When set, this collection is publicly viewable at /public/collections/{token}.
+    # Null = not shared. Rotated by generating a new token.
+    share_token = Column(String, nullable=True, unique=True, index=True)
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     owner = relationship("User", back_populates="collections")
@@ -40,7 +43,14 @@ class Bookmark(Base):
     image_url = Column(String, nullable=True)
     summary = Column(Text, nullable=True)
     tags = Column(ARRAY(String), nullable=True, default=[])
-    # Cached OpenAI embedding of (title + summary + description + tags) for fast semantic search
+    # Extracted transcript / article body text. Populated at save time when a
+    # source supports it (YouTube captions, article body). Used to enrich
+    # summaries, tags, embeddings, and RAG ask answers. May be long.
+    transcript = Column(Text, nullable=True)
+    # Where the transcript came from: youtube, article, caption, none. Lets the
+    # UI explain provenance and lets us swap in ASR later without breaking rows.
+    transcript_source = Column(String, nullable=True)
+    # Cached OpenAI embedding of (title + summary + description + tags + transcript) for fast semantic search
     embedding = Column(ARRAY(Float), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
