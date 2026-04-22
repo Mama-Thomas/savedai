@@ -8,7 +8,12 @@
 // of its listeners fire, so all state lives in chrome.storage.local. Every
 // entry point re-reads whatever it needs.
 
-import { bookmarkExists, createBookmark } from '../lib/api'
+import {
+  bookmarkExists,
+  createBookmark,
+  suggestCollection,
+  updateBookmark,
+} from '../lib/api'
 import { getToken } from '../lib/storage'
 
 // --- badge ---------------------------------------------------------------
@@ -147,8 +152,27 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 
   try {
-    await createBookmark(url, null)
-    await notify('Saved to SavedAI', url.length > 60 ? url.slice(0, 57) + '...' : url)
+    const bm = await createBookmark(url, null)
+
+    // Best-effort AI categorization. The popup shows the user a choice; the
+    // context menu has no UI surface, so we auto-apply only high-confidence
+    // "existing collection" matches. New-collection suggestions are surfaced
+    // in the notification so the user can confirm from the popup or web app.
+    let title = 'Saved to SavedAI'
+    let message = url.length > 60 ? url.slice(0, 57) + '...' : url
+    try {
+      const s = await suggestCollection(bm.id)
+      if (s?.type === 'existing' && s.collection_id) {
+        await updateBookmark(bm.id, { collection_id: s.collection_id })
+        title = `Saved to ${s.name}`
+      } else if (s?.type === 'new' && s.name) {
+        message = `Saved to Uncategorized. AI suggests new collection: ${s.name}`
+      }
+    } catch {
+      // Suggestion flow is optional. Fall back to the plain "Saved" toast.
+    }
+
+    await notify(title, message)
     // Bump the badge on the active tab if we just saved its URL.
     if (tab && url === tab.url) await refreshBadgeForTab(tab)
     else await refreshActiveTab()
