@@ -65,6 +65,13 @@ export async function fetchCollections() {
   return apiFetch('/collections')
 }
 
+// Cheap lookup so the popup can show "already saved" before the user clicks.
+// Returns { exists: false } or { exists: true, id, collection_id, title }.
+export async function bookmarkExists(url) {
+  if (!url) return { exists: false }
+  return apiFetch(`/bookmarks/exists?url=${encodeURIComponent(url)}`)
+}
+
 // collection_id: null = Uncategorized, number = specific. Title, tags, and
 // summary are generated server-side from the URL.
 export async function createBookmark(url, collection_id = null) {

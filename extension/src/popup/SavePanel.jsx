@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  bookmarkExists,
   createBookmark,
   createCollection,
   fetchCollections,
@@ -27,7 +28,8 @@ export default function SavePanel({ onSignOut }) {
   const [suggestion, setSuggestion] = useState(null) // { type, name, collection_id?, bookmarkId, mode, savedCollectionName? }
   const [applying, setApplying] = useState(false)
 
-  // Load active tab and collections in parallel on mount.
+  // Load active tab and collections in parallel on mount, then check whether
+  // the URL is already saved so we can flip straight to the duplicate state.
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -39,6 +41,11 @@ export default function SavePanel({ onSignOut }) {
         if (!alive) return
         setTab(activeTab || null)
         setCollections(Array.isArray(cols) ? cols : [])
+        const u = activeTab?.url || ''
+        if (u.startsWith('http')) {
+          const r = await bookmarkExists(u).catch(() => null)
+          if (alive && r?.exists) setDuplicate(true)
+        }
       } catch (e) {
         if (!alive) return
         setError(e.message || 'Could not read active tab.')

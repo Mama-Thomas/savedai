@@ -252,6 +252,38 @@ def list_bookmarks(
     )
 
 
+# Cheap "is this URL already saved by me?" check used by the Chrome extension
+# popup and the icon-badge service worker. Returns the matching bookmark id +
+# collection_id if found, or {exists: false} otherwise. Avoids reusing the
+# duplicate-detection in POST so we don't accidentally rate-limit lookups.
+@app.get("/bookmarks/exists")
+@limiter.limit("120/minute")
+def bookmark_exists(
+    request: Request,
+    url: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if not url or len(url) > 2048:
+        return {"exists": False}
+    bm = (
+        db.query(models.Bookmark)
+        .filter(
+            models.Bookmark.user_id == current_user.id,
+            models.Bookmark.url == url,
+        )
+        .first()
+    )
+    if not bm:
+        return {"exists": False}
+    return {
+        "exists": True,
+        "id": bm.id,
+        "collection_id": bm.collection_id,
+        "title": bm.title,
+    }
+
+
 @app.post("/bookmarks", response_model=schemas.BookmarkResponse, status_code=201)
 @limiter.limit("20/hour")
 def create_bookmark(
