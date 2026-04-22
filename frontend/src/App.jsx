@@ -6,6 +6,7 @@ import BookmarkCard from './components/BookmarkCard'
 import CollectionSummary from './components/CollectionSummary'
 import CollectionsSidebar from './components/CollectionsSidebar'
 import DateControls from './components/DateControls'
+import LandingPage from './components/LandingPage'
 import SearchBar from './components/SearchBar'
 import ShareModal from './components/ShareModal'
 import TagFilter from './components/TagFilter'
@@ -47,6 +48,8 @@ export default function App() {
   const [endDate, setEndDate] = useState(null)
   // Share modal state: holds the collection being shared, or null.
   const [sharingCollection, setSharingCollection] = useState(null)
+  // Mobile sidebar drawer open/closed.
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
 
   useEffect(() => {
     if (!user) return
@@ -319,7 +322,22 @@ export default function App() {
     )
   }
 
-  if (!user) return <AuthPage />
+  // Route logged-out users:
+  //   /auth or /auth?mode=signup or /login or /signup  -> AuthPage
+  //   everything else                                  -> LandingPage
+  if (!user) {
+    const path = window.location.pathname
+    const mode =
+      new URLSearchParams(window.location.search).get('mode') === 'signup'
+        ? 'register'
+        : path === '/signup'
+        ? 'register'
+        : 'login'
+    if (path === '/auth' || path === '/login' || path === '/signup') {
+      return <AuthPage initialMode={mode} />
+    }
+    return <LandingPage />
+  }
 
   const collectionLabel = (() => {
     if (activeCollectionId === null) return 'All bookmarks'
@@ -331,7 +349,20 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="bg-white border-b border-slate-100 sticky top-0 z-10 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center gap-3">
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 py-3 sm:py-4 flex items-center gap-2 sm:gap-3">
+          {/* Mobile-only hamburger to open the collections drawer */}
+          <button
+            type="button"
+            onClick={() => setMobileSidebarOpen(true)}
+            className="sm:hidden -ml-1 p-2 rounded-lg text-slate-500 hover:bg-slate-100 cursor-pointer"
+            aria-label="Open collections"
+          >
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+
           <div className="flex items-center gap-2 shrink-0">
             <div className="h-8 w-8 rounded-lg bg-sky-500 flex items-center justify-center shadow-sm">
               <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -339,20 +370,21 @@ export default function App() {
                   d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
               </svg>
             </div>
-            <span className="font-bold text-slate-800 text-lg tracking-tight">SavedAI</span>
+            <span className="font-bold text-slate-800 text-base sm:text-lg tracking-tight">SavedAI</span>
           </div>
-          <span className="hidden sm:inline text-xs text-slate-400 bg-slate-50 px-2 py-0.5 rounded-full border border-slate-100">
+          <span className="hidden md:inline text-xs text-slate-400 bg-slate-50 px-2 py-0.5 rounded-full border border-slate-100">
             AI-powered bookmarks
           </span>
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
             <button
               onClick={() => setAskOpen(true)}
-              className="text-xs font-medium text-white bg-indigo-500 hover:bg-indigo-600 px-3 py-1.5 rounded-lg transition cursor-pointer"
+              className="text-xs font-medium text-white bg-indigo-500 hover:bg-indigo-600 px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer"
             >
               Ask AI
             </button>
-            <div className="flex items-stretch rounded-lg border border-slate-200 overflow-hidden">
+            {/* Full export picker on tablet+; compact icon-only on mobile */}
+            <div className="hidden sm:flex items-stretch rounded-lg border border-slate-200 overflow-hidden">
               <select
                 value={exportFormat}
                 onChange={(e) => setExportFormat(e.target.value)}
@@ -376,32 +408,91 @@ export default function App() {
                 {exporting ? 'Exporting...' : 'Export'}
               </button>
             </div>
-            <span className="hidden sm:inline text-xs text-slate-400 truncate max-w-[160px]">
+            <button
+              onClick={() => handleExport(exportFormat)}
+              disabled={exporting}
+              className="sm:hidden p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition cursor-pointer disabled:opacity-50"
+              title={`Export as ${exportFormat.toUpperCase()}`}
+              aria-label="Export"
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M12 10v6m0 0l-3-3m3 3l3-3M4 6h16M4 18h16" />
+              </svg>
+            </button>
+            <span className="hidden md:inline text-xs text-slate-400 truncate max-w-[160px]">
               {user.email}
             </span>
             <button
               onClick={logout}
-              className="text-xs text-slate-400 hover:text-slate-700 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-slate-300 transition cursor-pointer"
+              className="text-xs text-slate-400 hover:text-slate-700 px-2 sm:px-3 py-1.5 rounded-lg border border-slate-200 hover:border-slate-300 transition cursor-pointer"
             >
-              Sign out
+              <span className="hidden sm:inline">Sign out</span>
+              <svg className="sm:hidden h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
             </button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-8 flex flex-col sm:flex-row gap-6">
-        <CollectionsSidebar
-          collections={collections}
-          activeCollectionId={activeCollectionId}
-          onSelect={(id) => {
-            setActiveCollectionId(id)
-            setActiveTag(null)
-          }}
-          onCreate={handleCreateCollection}
-          onRename={handleRenameCollection}
-          onDelete={handleDeleteCollection}
-          onShare={(c) => setSharingCollection(c)}
-        />
+      {/* Mobile sidebar drawer: full-height panel sliding in from the left */}
+      {mobileSidebarOpen && (
+        <div
+          className="sm:hidden fixed inset-0 z-30 bg-slate-900/40"
+          onClick={() => setMobileSidebarOpen(false)}
+        >
+          <div
+            className="absolute inset-y-0 left-0 w-72 max-w-[85vw] bg-slate-50 border-r border-slate-200 shadow-xl p-3 overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-2 py-2 mb-2">
+              <span className="text-sm font-semibold text-slate-700">Your library</span>
+              <button
+                onClick={() => setMobileSidebarOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                aria-label="Close"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <CollectionsSidebar
+              collections={collections}
+              activeCollectionId={activeCollectionId}
+              onSelect={(id) => {
+                setActiveCollectionId(id)
+                setActiveTag(null)
+                setMobileSidebarOpen(false)
+              }}
+              onCreate={handleCreateCollection}
+              onRename={handleRenameCollection}
+              onDelete={handleDeleteCollection}
+              onShare={(c) => { setSharingCollection(c); setMobileSidebarOpen(false) }}
+            />
+          </div>
+        </div>
+      )}
+
+      <main className="max-w-7xl mx-auto px-3 sm:px-4 py-5 sm:py-8 flex flex-col sm:flex-row gap-4 sm:gap-6">
+        {/* Desktop sidebar (hidden on mobile in favor of the drawer above) */}
+        <div className="hidden sm:block">
+          <CollectionsSidebar
+            collections={collections}
+            activeCollectionId={activeCollectionId}
+            onSelect={(id) => {
+              setActiveCollectionId(id)
+              setActiveTag(null)
+            }}
+            onCreate={handleCreateCollection}
+            onRename={handleRenameCollection}
+            onDelete={handleDeleteCollection}
+            onShare={(c) => setSharingCollection(c)}
+          />
+        </div>
 
         <div className="flex-1 min-w-0">
           <div className="flex flex-col sm:flex-row gap-3 mb-6">
