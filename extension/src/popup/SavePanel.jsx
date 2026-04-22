@@ -81,6 +81,9 @@ export default function SavePanel({ onSignOut }) {
       const cid = collectionId === '' ? null : Number(collectionId)
       const bm = await createBookmark(url, cid)
       setSaved(bm)
+      // Ask the service worker to refresh the action-icon badge so the
+      // green check shows immediately without waiting for a tab change.
+      try { chrome.runtime.sendMessage({ type: 'refresh-badge' }) } catch {}
       // Best-effort suggestion. Same rules as the web app: surface if saved
       // uncategorized, or if AI disagrees with the chosen collection.
       try {

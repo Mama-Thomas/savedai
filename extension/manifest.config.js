@@ -27,7 +27,7 @@ export default {
     service_worker: 'src/background/service_worker.js',
     type: 'module',
   },
-  permissions: ['storage', 'activeTab'],
+  permissions: ['storage', 'activeTab', 'tabs', 'contextMenus', 'notifications'],
   // Dev hosts, swap to your production API origin in step 3.7 settings.
   host_permissions: [
     'http://localhost:8001/*',
