@@ -1,6 +1,125 @@
 import { useState } from 'react'
 import { askBookmarks } from '../api/bookmarks'
 
+// Markdown link: [label](https://...)
+const MD_LINK = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g
+// Citation-style: [1], [2], etc. Mapped to the sources array by index (N-1).
+const CITATION = /\[(\d+)\]/g
+// Bare URL anywhere in the text.
+const BARE_URL = /(https?:\/\/[^\s)<>"']+)/g
+
+/**
+ * Turns a plain-text answer into React children with real links:
+ *   - [label](url)   -> <a href=url>label</a>
+ *   - [N]            -> <a href=sources[N-1].url>[N]</a>  (if that source exists)
+ *   - https://...    -> <a href=url>url</a>
+ * The parent still uses whitespace-pre-wrap so newlines are preserved.
+ */
+function renderAnswerBody(text, sources = []) {
+  // First, split by markdown links so we don't double-link the URL inside ().
+  const segments = []
+  let lastIndex = 0
+  let match
+  MD_LINK.lastIndex = 0
+  while ((match = MD_LINK.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ type: 'text', value: text.slice(lastIndex, match.index) })
+    }
+    segments.push({ type: 'mdLink', label: match[1], url: match[2] })
+    lastIndex = match.index + match[0].length
+  }
+  if (lastIndex < text.length) {
+    segments.push({ type: 'text', value: text.slice(lastIndex) })
+  }
+
+  // Render. For every plain-text segment, linkify bare URLs + citations.
+  const nodes = []
+  let key = 0
+  for (const seg of segments) {
+    if (seg.type === 'mdLink') {
+      nodes.push(
+        <a
+          key={`md-${key++}`}
+          href={seg.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-indigo-600 hover:text-indigo-700 underline underline-offset-2 break-all"
+        >
+          {seg.label}
+        </a>
+      )
+    } else {
+      nodes.push(...linkifyPlain(seg.value, sources, `t${key++}`))
+    }
+  }
+  return nodes
+}
+
+// Inside a plain-text chunk, handle bare URLs first, then citations on the leftovers.
+function linkifyPlain(chunk, sources, baseKey) {
+  const out = []
+  let lastIndex = 0
+  let m
+  let k = 0
+  BARE_URL.lastIndex = 0
+  while ((m = BARE_URL.exec(chunk)) !== null) {
+    if (m.index > lastIndex) {
+      out.push(...linkifyCitations(chunk.slice(lastIndex, m.index), sources, `${baseKey}c${k++}`))
+    }
+    out.push(
+      <a
+        key={`${baseKey}u${k++}`}
+        href={m[1]}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-indigo-600 hover:text-indigo-700 underline underline-offset-2 break-all"
+      >
+        {m[1]}
+      </a>
+    )
+    lastIndex = m.index + m[1].length
+  }
+  if (lastIndex < chunk.length) {
+    out.push(...linkifyCitations(chunk.slice(lastIndex), sources, `${baseKey}c${k++}`))
+  }
+  return out
+}
+
+// Replaces [N] with a clickable tag that jumps to sources[N-1].url.
+function linkifyCitations(chunk, sources, baseKey) {
+  if (!sources || sources.length === 0) return [chunk]
+  const out = []
+  let lastIndex = 0
+  let m
+  let k = 0
+  CITATION.lastIndex = 0
+  while ((m = CITATION.exec(chunk)) !== null) {
+    const n = parseInt(m[1], 10)
+    const src = sources[n - 1]
+    if (m.index > lastIndex) out.push(chunk.slice(lastIndex, m.index))
+    if (src && src.url) {
+      out.push(
+        <a
+          key={`${baseKey}-${k++}`}
+          href={src.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={src.title || src.url}
+          className="inline-block px-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-100 rounded align-baseline no-underline"
+        >
+          [{n}]
+        </a>
+      )
+    } else {
+      // Number doesn't match a source, leave as plain text.
+      out.push(m[0])
+    }
+    lastIndex = m.index + m[0].length
+  }
+  if (lastIndex < chunk.length) out.push(chunk.slice(lastIndex))
+  return out
+}
+
 export default function AskModal({
   open,
   onClose,
@@ -119,7 +238,7 @@ export default function AskModal({
         {answer && (
           <div className="px-5 pb-5 max-h-[50vh] overflow-y-auto">
             <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-xl text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
-              {answer}
+              {renderAnswerBody(answer, sources)}
             </div>
             {sources.length > 0 && (
               <div className="mt-4">
