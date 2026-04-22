@@ -59,3 +59,17 @@ export async function register(email, password) {
 export async function getMe() {
   return apiFetch('/auth/me')
 }
+
+// Bookmarks + collections
+export async function fetchCollections() {
+  return apiFetch('/collections')
+}
+
+// collection_id: null = Uncategorized, number = specific. Title, tags, and
+// summary are generated server-side from the URL.
+export async function createBookmark(url, collection_id = null) {
+  return apiFetch('/bookmarks', {
+    method: 'POST',
+    body: { url, collection_id },
+  })
+}

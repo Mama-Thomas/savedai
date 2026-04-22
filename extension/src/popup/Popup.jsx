@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { clearAuth, getToken, getUserEmail } from '../lib/storage'
 import SignIn from './SignIn'
+import SavePanel from './SavePanel'
 
 /**
  * Popup root. Reads auth state from chrome.storage.local once on open and
@@ -54,14 +55,7 @@ export default function Popup() {
       {!ready ? (
         <div className="py-6 text-center text-xs text-slate-400">Loading...</div>
       ) : email ? (
-        <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-          <p className="text-xs font-semibold text-slate-700 mb-1">
-            Signed in as {email}
-          </p>
-          <p className="text-[11px] leading-relaxed text-slate-500">
-            Save Current Tab, collections, and tags land in Step 3.3.
-          </p>
-        </div>
+        <SavePanel onSignOut={handleSignOut} />
       ) : (
         <SignIn onAuthed={(em) => setEmail(em)} />
       )}
