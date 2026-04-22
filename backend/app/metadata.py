@@ -5,6 +5,8 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from app.url_safety import is_safe_public_url
+
 
 HEADERS = {
     "User-Agent": (
@@ -41,6 +43,12 @@ def fetch_metadata(url: str) -> Tuple[Optional[str], Optional[str], Optional[str
     title = None
     description = None
     image_url = None
+
+    # Refuse to scrape anything that isn't a publicly-routable http(s) URL.
+    # Stops SSRF attempts via crafted bookmarks (localhost, 169.254.*, etc).
+    # Caller treats empty returns as "no metadata available" and degrades.
+    if not is_safe_public_url(url):
+        return None, None, None
 
     parsed = urlparse(url)
     host = parsed.netloc.lower()

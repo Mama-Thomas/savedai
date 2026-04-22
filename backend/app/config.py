@@ -46,4 +46,29 @@ class Settings(BaseSettings):
         extra = "ignore"
 
 
+# Placeholders baked into Settings for local-dev convenience. In production
+# we refuse to boot with any of these still in place, since they'd leave the
+# app open (predictable JWT signing key, shared local DB password).
+_INSECURE_DEFAULTS = {
+    "JWT_SECRET_KEY": "change-this-secret-in-production",
+    "DATABASE_URL": "postgresql://postgres:password@localhost:5432/savedai",
+}
+
+
+def _guard_production_defaults(s: Settings) -> None:
+    if not s.is_production:
+        return
+    offenders = [
+        name for name, default in _INSECURE_DEFAULTS.items()
+        if getattr(s, name, None) == default
+    ]
+    if offenders:
+        raise RuntimeError(
+            "Refusing to start in production with default values for: "
+            + ", ".join(offenders)
+            + ". Set real values via environment variables."
+        )
+
+
 settings = Settings()
+_guard_production_defaults(settings)

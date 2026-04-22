@@ -1,6 +1,7 @@
 import csv
 import difflib
 import io
+import logging
 import re
 from datetime import datetime
 from typing import Optional
@@ -32,12 +33,15 @@ from app.database import Base, engine, get_db
 from app.email import send_password_reset_email
 from app.metadata import fetch_metadata
 from app.transcript import fetch_transcript
+from app.url_safety import is_safe_public_url
 from app.search import (
     build_bookmark_text,
     build_match_info,
     embed_single,
     search_bookmarks,
 )
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -108,8 +112,15 @@ def health():
 
 
 @app.get("/proxy-image")
-def proxy_image(url: str):
-    """Proxy images from restricted CDNs (e.g. Instagram) to bypass browser CORS."""
+@limiter.limit("60/minute")
+def proxy_image(request: Request, url: str):
+    """Proxy images from restricted CDNs (e.g. Instagram) to bypass browser CORS.
+
+    Gated by is_safe_public_url so the proxy can't be turned into an SSRF
+    to reach cloud metadata endpoints, internal services, or localhost.
+    """
+    if not is_safe_public_url(url):
+        raise HTTPException(status_code=400, detail="Invalid or blocked URL")
     try:
         headers = {
             "User-Agent": (
@@ -168,7 +179,8 @@ def login(
 
 
 @app.get("/auth/me", response_model=schemas.UserResponse)
-def me(current_user: models.User = Depends(get_current_user)):
+@limiter.limit("120/minute")
+def me(request: Request, current_user: models.User = Depends(get_current_user)):
     return current_user
 
 
@@ -240,7 +252,9 @@ def reset_password(
 # ---------------------------------------------------------------------------
 
 @app.get("/bookmarks", response_model=list[schemas.BookmarkResponse])
+@limiter.limit("60/minute")
 def list_bookmarks(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -446,7 +460,9 @@ def delete_bookmark(
 
 
 @app.get("/search", response_model=list[schemas.BookmarkResponse])
+@limiter.limit("30/minute")
 def search(
+    request: Request,
     q: str = "",
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -740,7 +756,9 @@ def _find_similar_collection(
     return None
 
 @app.get("/collections", response_model=list[schemas.CollectionResponse])
+@limiter.limit("60/minute")
 def list_collections(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -1200,7 +1218,9 @@ def read_public_collection(
 # ---------------------------------------------------------------------------
 
 @app.get("/export")
+@limiter.limit("10/hour")
 def export_bookmarks(
+    request: Request,
     format: str = "json",
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -1431,6 +1451,16 @@ def ask(
             payload.question,
             collection_id=payload.collection_id,
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ask failed: {e}")
+    except Exception:
+        # Don't leak the raw exception to the client; the message might
+        # include prompt fragments, internal IDs, or provider errors.
+        log.exception(
+            "ask_bookmarks failed for user=%s collection_id=%s",
+            current_user.id,
+            payload.collection_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to answer your question right now. Please try again.",
+        )
     return {"answer": answer, "sources": sources}

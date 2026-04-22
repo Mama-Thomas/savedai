@@ -19,6 +19,8 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+from app.url_safety import is_safe_public_url
+
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -107,6 +109,11 @@ def _is_article_candidate(url: str) -> bool:
 
 def _fetch_article_text(url: str) -> Optional[str]:
     if not _is_article_candidate(url):
+        return None
+    # Both trafilatura.fetch_url and the plain requests fallback will happily
+    # hit localhost, link-local, or private IPs if we don't gate them. SSRF
+    # guard goes at the top so we fail closed for untrusted URLs.
+    if not is_safe_public_url(url):
         return None
     try:
         import trafilatura
