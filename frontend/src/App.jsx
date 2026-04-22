@@ -6,6 +6,7 @@ import BookmarkCard from './components/BookmarkCard'
 import CollectionSummary from './components/CollectionSummary'
 import CollectionsSidebar from './components/CollectionsSidebar'
 import DateControls from './components/DateControls'
+import ExportMenu, { EXPORT_FORMATS } from './components/ExportMenu'
 import LandingPage from './components/LandingPage'
 import SearchBar from './components/SearchBar'
 import ShareModal from './components/ShareModal'
@@ -383,7 +384,7 @@ export default function App() {
             >
               Ask AI
             </button>
-            {/* Full export picker on tablet+; compact icon-only on mobile */}
+            {/* Full export picker on tablet+; popover menu on mobile */}
             <div className="hidden sm:flex items-stretch rounded-lg border border-slate-200 overflow-hidden">
               <select
                 value={exportFormat}
@@ -392,12 +393,9 @@ export default function App() {
                 className="text-xs text-slate-600 bg-white px-2 py-1.5 border-r border-slate-200 focus:outline-none cursor-pointer disabled:opacity-50"
                 title="Export format"
               >
-                <option value="json">JSON</option>
-                <option value="csv">CSV</option>
-                <option value="html">HTML (browser import)</option>
-                <option value="markdown">Markdown</option>
-                <option value="txt">TXT</option>
-                <option value="pdf">PDF</option>
+                {EXPORT_FORMATS.map((f) => (
+                  <option key={f.value} value={f.value}>{f.label}</option>
+                ))}
               </select>
               <button
                 onClick={() => handleExport(exportFormat)}
@@ -408,18 +406,15 @@ export default function App() {
                 {exporting ? 'Exporting...' : 'Export'}
               </button>
             </div>
-            <button
-              onClick={() => handleExport(exportFormat)}
-              disabled={exporting}
-              className="sm:hidden p-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition cursor-pointer disabled:opacity-50"
-              title={`Export as ${exportFormat.toUpperCase()}`}
-              aria-label="Export"
-            >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M12 10v6m0 0l-3-3m3 3l3-3M4 6h16M4 18h16" />
-              </svg>
-            </button>
+            <div className="sm:hidden">
+              <ExportMenu
+                onExport={(fmt) => {
+                  setExportFormat(fmt)
+                  handleExport(fmt)
+                }}
+                exporting={exporting}
+              />
+            </div>
             <span className="hidden md:inline text-xs text-slate-400 truncate max-w-[160px]">
               {user.email}
             </span>
@@ -558,34 +553,38 @@ export default function App() {
           />
 
           {suggestion && (
-            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-3 text-sm">
-              <svg className="h-5 w-5 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
-              </svg>
-              <div className="flex-1 text-slate-700">
-                {suggestion.mode === 'mismatch' && suggestion.type === 'existing' ? (
-                  <>This doesn't look like <span className="font-semibold">{suggestion.savedCollectionName}</span>. It fits <span className="font-semibold">{suggestion.name}</span> better. Move it?</>
-                ) : suggestion.mode === 'mismatch' && suggestion.type === 'new' ? (
-                  <>This doesn't look like <span className="font-semibold">{suggestion.savedCollectionName}</span>. Create a new <span className="font-semibold">{suggestion.name}</span> collection and move it there?</>
-                ) : suggestion.type === 'existing' ? (
-                  <>Looks like this bookmark belongs in <span className="font-semibold">{suggestion.name}</span>. Move it there?</>
-                ) : (
-                  <>No matching collection. Create a new one called <span className="font-semibold">{suggestion.name}</span>?</>
-                )}
+            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center gap-3 text-sm">
+              <div className="flex items-start sm:items-center gap-2 flex-1 min-w-0">
+                <svg className="h-5 w-5 text-amber-500 shrink-0 mt-0.5 sm:mt-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                </svg>
+                <div className="flex-1 text-slate-700">
+                  {suggestion.mode === 'mismatch' && suggestion.type === 'existing' ? (
+                    <>This doesn't look like <span className="font-semibold">{suggestion.savedCollectionName}</span>. It fits <span className="font-semibold">{suggestion.name}</span> better. Move it?</>
+                  ) : suggestion.mode === 'mismatch' && suggestion.type === 'new' ? (
+                    <>This doesn't look like <span className="font-semibold">{suggestion.savedCollectionName}</span>. Create a new <span className="font-semibold">{suggestion.name}</span> collection and move it there?</>
+                  ) : suggestion.type === 'existing' ? (
+                    <>Looks like this bookmark belongs in <span className="font-semibold">{suggestion.name}</span>. Move it there?</>
+                  ) : (
+                    <>No matching collection. Create a new one called <span className="font-semibold">{suggestion.name}</span>?</>
+                  )}
+                </div>
               </div>
-              <button
-                onClick={acceptSuggestion}
-                className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-semibold cursor-pointer"
-              >
-                {suggestion.type === 'existing' ? 'Move it' : 'Create and move'}
-              </button>
-              <button
-                onClick={() => setSuggestion(null)}
-                className="text-xs text-slate-500 hover:text-slate-700 cursor-pointer"
-              >
-                {suggestion.mode === 'mismatch' ? 'Keep here' : 'Dismiss'}
-              </button>
+              <div className="flex items-center gap-2 sm:shrink-0">
+                <button
+                  onClick={acceptSuggestion}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-semibold cursor-pointer"
+                >
+                  {suggestion.type === 'existing' ? 'Move it' : 'Create and move'}
+                </button>
+                <button
+                  onClick={() => setSuggestion(null)}
+                  className="text-xs text-slate-500 hover:text-slate-700 cursor-pointer"
+                >
+                  {suggestion.mode === 'mismatch' ? 'Keep here' : 'Dismiss'}
+                </button>
+              </div>
             </div>
           )}
 
