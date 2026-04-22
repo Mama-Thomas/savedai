@@ -73,3 +73,17 @@ export async function createBookmark(url, collection_id = null) {
     body: { url, collection_id },
   })
 }
+
+export async function updateBookmark(id, payload) {
+  return apiFetch(`/bookmarks/${id}`, { method: 'PATCH', body: payload })
+}
+
+// Ask the backend which existing collection (if any) is a good home for this
+// bookmark, or what to name a new one. Best-effort; callers should catch.
+export async function suggestCollection(bookmarkId) {
+  return apiFetch(`/collections/suggest/${bookmarkId}`)
+}
+
+export async function createCollection(name, { force = false } = {}) {
+  return apiFetch('/collections', { method: 'POST', body: { name, force } })
+}

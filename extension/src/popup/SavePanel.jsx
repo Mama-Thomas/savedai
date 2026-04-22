@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { createBookmark, fetchCollections, getMe } from '../lib/api'
+import {
+  createBookmark,
+  createCollection,
+  fetchCollections,
+  suggestCollection,
+  updateBookmark,
+} from '../lib/api'
 
 /**
  * Reads the active tab's URL + title, lets the user pick a collection, and
@@ -18,6 +24,8 @@ export default function SavePanel({ onSignOut }) {
   const [error, setError] = useState('')
   const [duplicate, setDuplicate] = useState(false)
   const [saved, setSaved] = useState(null)
+  const [suggestion, setSuggestion] = useState(null) // { type, name, collection_id?, bookmarkId, mode, savedCollectionName? }
+  const [applying, setApplying] = useState(false)
 
   // Load active tab and collections in parallel on mount.
   useEffect(() => {
@@ -66,6 +74,24 @@ export default function SavePanel({ onSignOut }) {
       const cid = collectionId === '' ? null : Number(collectionId)
       const bm = await createBookmark(url, cid)
       setSaved(bm)
+      // Best-effort suggestion. Same rules as the web app: surface if saved
+      // uncategorized, or if AI disagrees with the chosen collection.
+      try {
+        const s = await suggestCollection(bm.id)
+        if (!s) return
+        const savedCid = bm.collection_id || null
+        if (!savedCid) {
+          setSuggestion({ ...s, bookmarkId: bm.id, mode: 'uncategorized' })
+        } else if (
+          (s.type === 'existing' && s.collection_id && s.collection_id !== savedCid) ||
+          s.type === 'new'
+        ) {
+          const savedName = collections.find((c) => c.id === savedCid)?.name || 'that collection'
+          setSuggestion({ ...s, bookmarkId: bm.id, mode: 'mismatch', savedCollectionName: savedName })
+        }
+      } catch {
+        // Suggestions are best-effort, ignore failures.
+      }
     } catch (err) {
       if (err.status === 409) {
         setDuplicate(true)
@@ -77,6 +103,27 @@ export default function SavePanel({ onSignOut }) {
       }
     } finally {
       setSaving(false)
+    }
+  }
+
+  const applySuggestion = async () => {
+    if (!suggestion) return
+    setApplying(true)
+    try {
+      let targetCid = suggestion.collection_id
+      if (suggestion.type === 'new') {
+        const c = await createCollection(suggestion.name, { force: true })
+        targetCid = c.id
+        // Keep local dropdown in sync so the UI reflects the new collection.
+        setCollections((prev) => [...prev, c])
+      }
+      await updateBookmark(suggestion.bookmarkId, { collection_id: targetCid })
+      setCollectionId(String(targetCid))
+      setSuggestion(null)
+    } catch (err) {
+      setError(err.message || 'Could not apply suggestion.')
+    } finally {
+      setApplying(false)
     }
   }
 
@@ -144,6 +191,38 @@ export default function SavePanel({ onSignOut }) {
       {saved && (
         <div className="p-2.5 bg-emerald-50 border border-emerald-100 rounded-lg text-[11px] text-emerald-700">
           Saved. AI summary + tags are generating in the background.
+        </div>
+      )}
+
+      {suggestion && (
+        <div className="p-2.5 bg-indigo-50 border border-indigo-100 rounded-lg text-[11px] text-indigo-800">
+          <p className="mb-2 leading-relaxed">
+            {suggestion.mode === 'mismatch'
+              ? suggestion.type === 'existing'
+                ? <>This looks more like <b>{suggestion.name}</b> than <b>{suggestion.savedCollectionName}</b>.</>
+                : <>This looks like a new collection called <b>{suggestion.name}</b>, not <b>{suggestion.savedCollectionName}</b>.</>
+              : suggestion.type === 'existing'
+                ? <>AI suggests the collection <b>{suggestion.name}</b>.</>
+                : <>AI suggests a new collection called <b>{suggestion.name}</b>.</>}
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={applySuggestion}
+              disabled={applying}
+              className="px-2.5 py-1 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-white text-[11px] font-semibold rounded-md cursor-pointer"
+            >
+              {applying ? 'Moving...' : suggestion.type === 'new' ? `Create "${suggestion.name}"` : `Move to ${suggestion.name}`}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSuggestion(null)}
+              disabled={applying}
+              className="px-2.5 py-1 bg-white hover:bg-slate-50 text-slate-600 text-[11px] font-medium rounded-md border border-slate-200 cursor-pointer"
+            >
+              Keep as is
+            </button>
+          </div>
         </div>
       )}
 
