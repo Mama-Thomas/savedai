@@ -47,7 +47,18 @@ log = logging.getLogger(__name__)
 # Setup
 # ---------------------------------------------------------------------------
 
-Base.metadata.create_all(bind=engine)
+# `create_all` is a no-op if the tables already exist, but it still issues
+# DDL lookups, which means it will hang / raise if Postgres is unreachable.
+# We surface a clearer message than the raw SQLAlchemy traceback and then
+# re-raise so the process still fails fast.
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception:
+    log.exception(
+        "Failed to run Base.metadata.create_all at startup. "
+        "Is DATABASE_URL correct and the database reachable?"
+    )
+    raise
 
 limiter = Limiter(key_func=rate_limit_key)
 
@@ -63,6 +74,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     X-Frame-Options: block our API from being iframed.
     Referrer-Policy: don't leak the full URL when users click out.
     Permissions-Policy: disable powerful features we don't use.
+    Content-Security-Policy: this is a JSON API, so nothing on a response
+        page should ever load scripts, styles, images, or be framed. The
+        strictest possible policy is the correct one.
     HSTS: in production only, force HTTPS for a year.
     """
 
@@ -73,6 +87,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         response.headers.setdefault(
             "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+        )
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'none'; frame-ancestors 'none'",
         )
         if settings.is_production:
             response.headers.setdefault(

@@ -11,6 +11,12 @@ client = OpenAI(api_key=settings.OPENAI_API_KEY)
 # well inside the model's input budget while still giving it real content.
 _SUMMARIZER_TRANSCRIPT_CHARS = 6000
 
+# Caps on what we accept back from the model and persist. These are defensive:
+# the prompt asks for short outputs, but a pathological or prompt-injected
+# response shouldn't be able to bloat a DB row or stuff 200-char "tags".
+_MAX_SUMMARY_CHARS = 1000
+_MAX_TAG_CHARS = 50
+
 
 def generate_summary_and_tags(
     url: str,
@@ -65,6 +71,14 @@ Respond in this exact JSON format (no markdown, no extra text):
     # Strip potential markdown code fences
     content = content.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     data = json.loads(content)
-    summary = data.get("summary", "")
-    tags = data.get("tags", [])[:5]
+    raw_summary = data.get("summary", "") or ""
+    summary = raw_summary.strip()[:_MAX_SUMMARY_CHARS]
+    raw_tags = data.get("tags", []) or []
+    tags: List[str] = []
+    for t in raw_tags[:5]:
+        if not isinstance(t, str):
+            continue
+        clipped = t.strip()[:_MAX_TAG_CHARS]
+        if clipped:
+            tags.append(clipped)
     return summary, tags

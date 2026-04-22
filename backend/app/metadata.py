@@ -16,6 +16,20 @@ HEADERS = {
     )
 }
 
+# Upper bounds on scraped fields. Some pages have pathological titles and
+# descriptions; without caps a single bookmark can bloat the DB row. These
+# numbers are generous for real content but keep us honest.
+_MAX_TITLE_CHARS = 500
+_MAX_DESCRIPTION_CHARS = 2000
+_MAX_IMAGE_URL_CHARS = 2048
+
+
+def _clip(value: Optional[str], limit: int) -> Optional[str]:
+    if not value:
+        return value
+    v = value.strip()
+    return v[:limit] if len(v) > limit else v
+
 
 def _fetch_oembed(oembed_url: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Query an oEmbed endpoint and return (title, description, image_url)."""
@@ -57,13 +71,21 @@ def fetch_metadata(url: str) -> Tuple[Optional[str], Optional[str], Optional[str
     if "tiktok.com" in host:
         t, d, i = _fetch_oembed(f"https://www.tiktok.com/oembed?url={url}")
         if t:
-            return t, d, i
+            return (
+                _clip(t, _MAX_TITLE_CHARS),
+                _clip(d, _MAX_DESCRIPTION_CHARS),
+                _clip(i, _MAX_IMAGE_URL_CHARS),
+            )
 
     # Instagram oEmbed fallback (public, no auth) - often returns limited info but better than nothing
     if "instagram.com" in host:
         t, d, i = _fetch_oembed(f"https://www.instagram.com/api/v1/oembed/?url={url}")
         if t:
-            return t, d, i
+            return (
+                _clip(t, _MAX_TITLE_CHARS),
+                _clip(d, _MAX_DESCRIPTION_CHARS),
+                _clip(i, _MAX_IMAGE_URL_CHARS),
+            )
 
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10, allow_redirects=True)
@@ -102,4 +124,8 @@ def fetch_metadata(url: str) -> Tuple[Optional[str], Optional[str], Optional[str
         parsed = urlparse(url)
         title = title or parsed.netloc
 
-    return title, description, image_url
+    return (
+        _clip(title, _MAX_TITLE_CHARS),
+        _clip(description, _MAX_DESCRIPTION_CHARS),
+        _clip(image_url, _MAX_IMAGE_URL_CHARS),
+    )
