@@ -2,22 +2,32 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
+import ResetPasswordPage from './components/ResetPasswordPage.jsx'
 import SharedCollectionPage from './components/SharedCollectionPage.jsx'
 import { AuthProvider } from './contexts/AuthContext.jsx'
 
-// Tiny pathname-based router. If the URL is /shared/<token>, render the
-// public read-only viewer and skip auth entirely. Anything else goes through
-// the authenticated app.
-const isSharedRoute = /^\/shared\/[^/?#]+/.test(window.location.pathname)
+// Tiny pathname-based router. Keeps us out of needing react-router.
+//   /shared/<token>          -> public, no auth
+//   /reset-password/<token>  -> public password reset form
+//   everything else          -> authenticated app (which itself shows either
+//                               the landing page or the auth screen depending
+//                               on whether the user is signed in).
+const path = window.location.pathname
+const isSharedRoute = /^\/shared\/[^/?#]+/.test(path)
+const isResetRoute = /^\/reset-password\/[^/?#]+/.test(path)
+
+function Root() {
+  if (isSharedRoute) return <SharedCollectionPage />
+  if (isResetRoute) return <ResetPasswordPage />
+  return (
+    <AuthProvider>
+      <App />
+    </AuthProvider>
+  )
+}
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    {isSharedRoute ? (
-      <SharedCollectionPage />
-    ) : (
-      <AuthProvider>
-        <App />
-      </AuthProvider>
-    )}
+    <Root />
   </StrictMode>,
 )

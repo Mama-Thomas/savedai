@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime, timedelta
 
 from fastapi import Depends, HTTPException, Request, status
@@ -26,6 +27,37 @@ def create_access_token(user_id: int) -> str:
     expire = datetime.utcnow() + timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
     payload = {"sub": str(user_id), "exp": expire}
     return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def access_token_lifetime_seconds() -> int:
+    """Seconds until a fresh access token expires. Used by the frontend to
+    schedule a client-side logout before the server starts rejecting calls."""
+    return int(settings.JWT_EXPIRE_MINUTES * 60)
+
+
+def generate_password_reset_token() -> tuple[str, str, datetime]:
+    """Create a new password-reset token.
+    Returns a tuple of (raw_token, hashed_token, expires_at). Email the raw
+    token; store only the hash."""
+    raw = secrets.token_urlsafe(32)
+    hashed = pwd_context.hash(raw)
+    expires_at = datetime.utcnow() + timedelta(
+        minutes=settings.PASSWORD_RESET_EXPIRE_MINUTES
+    )
+    return raw, hashed, expires_at
+
+
+def verify_password_reset_token(raw: str, user: "models.User") -> bool:
+    """Return True if `raw` is this user's pending reset token and it is not
+    expired. False otherwise. Constant time via bcrypt."""
+    if not user.password_reset_hash or not user.password_reset_expires:
+        return False
+    if datetime.utcnow() > user.password_reset_expires:
+        return False
+    try:
+        return pwd_context.verify(raw, user.password_reset_hash)
+    except Exception:
+        return False
 
 
 def get_current_user(
@@ -67,4 +99,9 @@ def rate_limit_key(request: Request) -> str:
                 return f"user:{user_id}"
         except Exception:
             pass
+    # Fall back to the client IP. Trust the X-Forwarded-For header only when
+    # the proxy sets it (Render, Vercel, Railway, etc.).
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
     return request.client.host if request.client else "unknown"

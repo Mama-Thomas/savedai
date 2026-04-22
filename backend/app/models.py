@@ -14,6 +14,11 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Single-use password reset token. Stored as a bcrypt hash so a DB leak
+    # can't be turned into a live reset link. Null when no reset is pending.
+    password_reset_hash = Column(String, nullable=True)
+    password_reset_expires = Column(DateTime, nullable=True)
+
     bookmarks = relationship("Bookmark", back_populates="owner", cascade="all, delete-orphan")
     collections = relationship("Collection", back_populates="owner", cascade="all, delete-orphan")
 

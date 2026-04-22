@@ -2,6 +2,7 @@ import csv
 import difflib
 import io
 import re
+from datetime import datetime
 from typing import Optional
 
 import requests
@@ -11,18 +12,24 @@ from fastapi.responses import Response, StreamingResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.orm import Session
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app import models, schemas
 from app.ai import generate_summary_and_tags
 from app.ask import ask_bookmarks
 from app.auth import (
+    access_token_lifetime_seconds,
     create_access_token,
+    generate_password_reset_token,
     get_current_user,
     hash_password,
     rate_limit_key,
     verify_password,
+    verify_password_reset_token,
 )
+from app.config import settings
 from app.database import Base, engine, get_db
+from app.email import send_password_reset_email
 from app.metadata import fetch_metadata
 from app.transcript import fetch_transcript
 from app.search import (
@@ -40,17 +47,55 @@ Base.metadata.create_all(bind=engine)
 
 limiter = Limiter(key_func=rate_limit_key)
 
-app = FastAPI(title="SavedAI", version="2.0.0")
+app = FastAPI(title="SavedAI", version="2.1.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Attach a small set of defensive HTTP headers to every response.
+
+    X-Content-Type-Options: stop browsers from sniffing MIME types.
+    X-Frame-Options: block our API from being iframed.
+    Referrer-Policy: don't leak the full URL when users click out.
+    Permissions-Policy: disable powerful features we don't use.
+    HSTS: in production only, force HTTPS for a year.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault(
+            "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+        )
+        if settings.is_production:
+            response.headers.setdefault(
+                "Strict-Transport-Security",
+                "max-age=31536000; includeSubDomains",
+            )
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    max_age=600,
 )
+
+
+def _token_payload(user_id: int) -> dict:
+    """Shape of /auth/login and /auth/register responses."""
+    return {
+        "access_token": create_access_token(user_id),
+        "token_type": "bearer",
+        "expires_in": access_token_lifetime_seconds(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -86,30 +131,108 @@ def proxy_image(url: str):
 # ---------------------------------------------------------------------------
 
 @app.post("/auth/register", response_model=schemas.TokenResponse, status_code=201)
-def register(payload: schemas.UserCreate, db: Session = Depends(get_db)):
-    if db.query(models.User).filter(models.User.email == payload.email).first():
+@limiter.limit("10/hour")
+def register(
+    request: Request,
+    payload: schemas.UserCreate,
+    db: Session = Depends(get_db),
+):
+    # Normalize email to lowercase at the edge so lookups are consistent.
+    email = payload.email.lower().strip()
+    if db.query(models.User).filter(models.User.email == email).first():
         raise HTTPException(status_code=409, detail="Email already registered")
     user = models.User(
-        email=payload.email,
+        email=email,
         hashed_password=hash_password(payload.password),
     )
     db.add(user)
     db.commit()
     db.refresh(user)
-    return {"access_token": create_access_token(user.id)}
+    return _token_payload(user.id)
 
 
 @app.post("/auth/login", response_model=schemas.TokenResponse)
-def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == payload.email).first()
+@limiter.limit("20/hour")
+def login(
+    request: Request,
+    payload: schemas.LoginRequest,
+    db: Session = Depends(get_db),
+):
+    email = payload.email.lower().strip()
+    user = db.query(models.User).filter(models.User.email == email).first()
+    # Use a generic message either way so login never leaks whether an email
+    # is registered.
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    return {"access_token": create_access_token(user.id)}
+    return _token_payload(user.id)
 
 
 @app.get("/auth/me", response_model=schemas.UserResponse)
 def me(current_user: models.User = Depends(get_current_user)):
     return current_user
+
+
+@app.post("/auth/forgot-password", status_code=202)
+@limiter.limit("5/hour")
+def forgot_password(
+    request: Request,
+    payload: schemas.ForgotPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    """Start a password reset. Always returns 202 to avoid leaking whether an
+    email exists in our system. If the address is real, we email a short-lived
+    reset link."""
+    email = payload.email.lower().strip()
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if user:
+        raw, hashed, expires_at = generate_password_reset_token()
+        user.password_reset_hash = hashed
+        user.password_reset_expires = expires_at
+        db.commit()
+        reset_url = f"{settings.APP_BASE_URL.rstrip('/')}/reset-password/{raw}"
+        # Send best-effort. Failures are logged but never surfaced to the
+        # caller (account enumeration hardening).
+        send_password_reset_email(user.email, reset_url)
+    return {"detail": "If that email is registered, a reset link is on its way."}
+
+
+@app.post("/auth/reset-password", status_code=200)
+@limiter.limit("10/hour")
+def reset_password(
+    request: Request,
+    payload: schemas.ResetPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    """Consume a reset token and set a new password.
+
+    We scan users with a pending, unexpired reset and bcrypt-check each one
+    against the raw token. In practice the set of users with a live reset at
+    any moment is tiny, and we never expose which user the token belongs to.
+    """
+    now = datetime.utcnow()
+    candidates = (
+        db.query(models.User)
+        .filter(
+            models.User.password_reset_hash.isnot(None),
+            models.User.password_reset_expires > now,
+        )
+        .all()
+    )
+    target: Optional[models.User] = None
+    for u in candidates:
+        if verify_password_reset_token(payload.token, u):
+            target = u
+            break
+    if target is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This reset link is invalid or has expired. Request a new one.",
+        )
+    target.hashed_password = hash_password(payload.password)
+    target.password_reset_hash = None
+    target.password_reset_expires = None
+    db.commit()
+    return {"detail": "Password updated. You can sign in with your new password now."}
 
 
 # ---------------------------------------------------------------------------
@@ -945,7 +1068,9 @@ def _generate_share_token() -> str:
 
 
 @app.post("/collections/{collection_id}/share")
+@limiter.limit("30/hour")
 def share_collection(
+    request: Request,
     collection_id: int,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -1009,7 +1134,12 @@ def unshare_collection(
     "/public/collections/{token}",
     response_model=schemas.PublicCollectionResponse,
 )
-def read_public_collection(token: str, db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+def read_public_collection(
+    request: Request,
+    token: str,
+    db: Session = Depends(get_db),
+):
     """Unauthenticated read of a shared collection. No rate-limit exemption:
     the slowapi middleware still applies, just no auth dependency."""
     coll = (
