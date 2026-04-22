@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+/* The popup window has a fixed outer width, so lock the root and kill default
+   margins. Chrome will still resize to content height automatically. */
+html,
+body,
+#root {
+  width: 360px;
+  margin: 0;
+  padding: 0;
+  background: white;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
