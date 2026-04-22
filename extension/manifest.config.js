@@ -28,9 +28,23 @@ export default {
     type: 'module',
   },
   permissions: ['storage', 'activeTab', 'tabs', 'contextMenus', 'notifications'],
-  // Dev hosts, swap to your production API origin in step 3.7 settings.
+  // Dev hosts. The user can point the extension at a different backend from
+  // the in-popup settings page; any new origin should be added here (or via
+  // the browser prompt for optional host permissions if we ever adopt those).
   host_permissions: [
     'http://localhost:8001/*',
     'http://127.0.0.1:8001/*',
   ],
+  // _execute_action is the reserved command name MV3 uses to open the popup
+  // in response to a keyboard shortcut. No service-worker handler required.
+  // Users can rebind from chrome://extensions/shortcuts if this collides.
+  commands: {
+    _execute_action: {
+      suggested_key: {
+        default: 'Ctrl+Shift+S',
+        mac: 'Command+Shift+S',
+      },
+      description: 'Open the SavedAI popup',
+    },
+  },
 }

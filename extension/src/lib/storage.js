@@ -7,7 +7,7 @@ const TOKEN_EXP_KEY = 'savedai.token_expires_at'
 const USER_EMAIL_KEY = 'savedai.user_email'
 const API_BASE_KEY = 'savedai.api_base'
 
-const DEFAULT_API_BASE = 'http://localhost:8001'
+export const DEFAULT_API_BASE = 'http://localhost:8001'
 
 async function get(keys) {
   return new Promise((resolve) => chrome.storage.local.get(keys, resolve))

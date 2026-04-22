@@ -2,15 +2,17 @@ import { useEffect, useState } from 'react'
 import { clearAuth, getToken, getUserEmail } from '../lib/storage'
 import SignIn from './SignIn'
 import SavePanel from './SavePanel'
+import SettingsPanel from './SettingsPanel'
 
 /**
  * Popup root. Reads auth state from chrome.storage.local once on open and
- * swaps between the sign-in form and the signed-in placeholder (which will
- * become the Save Current Tab form in step 3.3).
+ * swaps between SignIn, SavePanel, and SettingsPanel. View state lives here
+ * so the gear icon in the header can flip it.
  */
 export default function Popup() {
   const [ready, setReady] = useState(false)
   const [email, setEmail] = useState(null)
+  const [view, setView] = useState('save') // 'save' | 'settings'
 
   useEffect(() => {
     ;(async () => {
@@ -24,7 +26,11 @@ export default function Popup() {
   const handleSignOut = async () => {
     await clearAuth()
     setEmail(null)
+    setView('save')
   }
+
+  const toggleSettings = () =>
+    setView((v) => (v === 'settings' ? 'save' : 'settings'))
 
   return (
     <div className="w-full p-5">
@@ -43,11 +49,24 @@ export default function Popup() {
         </div>
         {email && (
           <button
-            onClick={handleSignOut}
-            className="text-[11px] text-slate-400 hover:text-slate-600 font-medium cursor-pointer"
-            title={email}
+            onClick={toggleSettings}
+            className="text-slate-400 hover:text-slate-600 cursor-pointer p-1 -m-1"
+            title={view === 'settings' ? 'Close settings' : 'Settings'}
+            aria-label={view === 'settings' ? 'Close settings' : 'Settings'}
           >
-            Sign out
+            {view === 'settings' ? (
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : (
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            )}
           </button>
         )}
       </header>
@@ -55,7 +74,15 @@ export default function Popup() {
       {!ready ? (
         <div className="py-6 text-center text-xs text-slate-400">Loading...</div>
       ) : email ? (
-        <SavePanel onSignOut={handleSignOut} />
+        view === 'settings' ? (
+          <SettingsPanel
+            email={email}
+            onSignOut={handleSignOut}
+            onBack={() => setView('save')}
+          />
+        ) : (
+          <SavePanel onSignOut={handleSignOut} />
+        )
       ) : (
         <SignIn onAuthed={(em) => setEmail(em)} />
       )}
