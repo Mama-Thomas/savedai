@@ -80,6 +80,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     HSTS: in production only, force HTTPS for a year.
     """
 
+    # Swagger UI and ReDoc load scripts and styles from a CDN, so the
+    # strict CSP that's right for our JSON endpoints would break those
+    # pages. Skip CSP (only) on the docs paths.
+    _CSP_EXEMPT_PATHS = ("/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect")
+
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -88,10 +93,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault(
             "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
         )
-        response.headers.setdefault(
-            "Content-Security-Policy",
-            "default-src 'none'; frame-ancestors 'none'",
-        )
+        if not any(request.url.path.startswith(p) for p in self._CSP_EXEMPT_PATHS):
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'none'; frame-ancestors 'none'",
+            )
         if settings.is_production:
             response.headers.setdefault(
                 "Strict-Transport-Security",
