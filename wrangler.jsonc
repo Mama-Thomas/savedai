@@ -1,0 +1,19 @@
+/**
+ * Cloudflare Workers config for the SavedAI frontend.
+ *
+ * We deploy the Vite-built React app as a static-only Worker using
+ * Workers Assets. The Worker has no main script, just an asset bundle
+ * served directly from `frontend/dist`.
+ *
+ * `not_found_handling: "single-page-application"` makes Cloudflare serve
+ * /index.html for any unknown route, so client-side routes like
+ * /shared/<token> and /reset-password/<token> work on a deep link refresh.
+ */
+{
+  "name": "savedai",
+  "compatibility_date": "2026-01-01",
+  "assets": {
+    "directory": "./frontend/dist",
+    "not_found_handling": "single-page-application"
+  }
+}
