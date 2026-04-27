@@ -28,10 +28,11 @@ export default {
     type: 'module',
   },
   permissions: ['storage', 'activeTab', 'tabs', 'contextMenus', 'notifications'],
-  // Dev hosts. The user can point the extension at a different backend from
-  // the in-popup settings page; any new origin should be added here (or via
-  // the browser prompt for optional host permissions if we ever adopt those).
+  // Backends the extension is allowed to call. Production is first; the
+  // localhost entries are kept so devs can point at a local backend via the
+  // in-popup settings page without touching this file.
   host_permissions: [
+    'https://savedai-api.onrender.com/*',
     'http://localhost:8001/*',
     'http://127.0.0.1:8001/*',
   ],

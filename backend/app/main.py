@@ -110,6 +110,10 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
+    # Chrome extensions get a per-install origin like chrome-extension://abcdef...,
+    # which we can't enumerate ahead of time. Match any chrome-extension origin
+    # via regex; the JWT in the Authorization header is what actually authenticates.
+    allow_origin_regex=r"chrome-extension://[a-z]+",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
