@@ -239,7 +239,7 @@ export default function SavePanel({ onSignOut }) {
       {/* Primary action */}
       {saved || duplicate ? (
         <a
-          href="http://localhost:3000"
+          href="https://savedai.dev"
           target="_blank"
           rel="noopener noreferrer"
           className="py-2 text-center bg-sky-500 hover:bg-sky-600 text-white text-sm font-semibold rounded-lg transition cursor-pointer"
