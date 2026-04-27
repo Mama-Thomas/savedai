@@ -1,7 +1,7 @@
 {
   "name": "savedai-extension",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Chrome extension for SavedAI. Save any link in one click.",
   "type": "module",
   "scripts": {

@@ -7,7 +7,9 @@ const TOKEN_EXP_KEY = 'savedai.token_expires_at'
 const USER_EMAIL_KEY = 'savedai.user_email'
 const API_BASE_KEY = 'savedai.api_base'
 
-export const DEFAULT_API_BASE = 'http://localhost:8001'
+// Production API. Users can override per-install via the Settings panel
+// (handy for self-hosters or when running the backend locally on :8001).
+export const DEFAULT_API_BASE = 'https://savedai-api.onrender.com'
 
 async function get(keys) {
   return new Promise((resolve) => chrome.storage.local.get(keys, resolve))
