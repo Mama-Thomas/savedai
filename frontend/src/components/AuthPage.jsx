@@ -32,6 +32,12 @@ export default function AuthPage({ initialMode = 'login' }) {
       const fn = isRegister ? register : login
       const data = await fn(email, password)
       saveToken(data.access_token, data.expires_in)
+      // After auth we're definitely past the /auth, /login, /signup screens.
+      // Drop the user back at / so a refresh doesn't bounce them to a page
+      // that's only meant for logged-out visitors.
+      if (['/auth', '/login', '/signup'].includes(window.location.pathname)) {
+        window.history.replaceState({}, '', '/')
+      }
     } catch (err) {
       const detail = err?.response?.data?.detail
       if (Array.isArray(detail)) {
