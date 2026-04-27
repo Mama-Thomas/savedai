@@ -96,12 +96,17 @@ def is_safe_public_url(url: str) -> bool:
 
     host = host.lower()
     # Literal IP in the URL (e.g. http://169.254.169.254/latest/meta-data/)
-    # skips DNS entirely; check before the hostname path.
+    # skips DNS entirely; check before the hostname path. _is_private_ip
+    # is fail-closed and treats any non-IP string as unsafe, so we have to
+    # check whether `host` is actually an IP literal first; otherwise every
+    # real hostname (cdninstagram.com, youtube.com, ...) would be rejected.
     try:
-        if _is_private_ip(host):
-            return False
-    except Exception:
-        pass
+        ipaddress.ip_address(host)
+        is_literal_ip = True
+    except ValueError:
+        is_literal_ip = False
+    if is_literal_ip and _is_private_ip(host):
+        return False
 
     if host in _LOCAL_HOSTNAMES:
         return False
