@@ -1,5 +1,7 @@
 # SavedAI
 
+[**Live app: savedai.dev**](https://savedai.dev) | [**Install on Chrome**](https://chromewebstore.google.com/detail/savedai/ndlamchfjlmajdclfbnpknniopgkklfl) | [**API docs**](https://savedai-api.onrender.com/docs)
+
 An AI-powered bookmark manager for the modern web. Paste any link (article, YouTube, TikTok, Instagram, X, GitHub, anything) and SavedAI fetches the page, extracts the body or transcript, generates a two-sentence summary plus tags with GPT-4o-mini, and routes it into the right collection automatically. Search semantically across everything you've saved, ask natural-language questions about your library, and share read-only collection links with anyone.
 
 ![Web app: a Food collection with an AI-generated description and bookmark cards](docs/screenshots/Screenshot_savedai_1.png)
